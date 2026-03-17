@@ -97,6 +97,7 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [actionsByRow, setActionsByRow] = useState<Record<string, ServerActionState>>({});
+  const [selectedRowKey, setSelectedRowKey] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchServers = async () => {
@@ -124,6 +125,7 @@ export default function App() {
   }, []);
 
   const handleServerAction = async (server: ServerRow, rowKey: string) => {
+    setSelectedRowKey(rowKey);
     if (server.serverConfigId === null) {
       setActionsByRow((current) => ({
         ...current,
@@ -180,7 +182,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <header className="sticky top-0 z-10 border-b border-slate-800 bg-slate-950/95 backdrop-blur">
-        <div className="mx-auto flex w-full max-w-6xl items-center gap-4 px-4 py-4 sm:px-6">
+        <div className="flex w-full items-center gap-4 py-4">
           <img
             src="https://cdn.prod.website-files.com/64b4def37ae684b348f630c4/64bf7db761bc3b0f8b6da64d_SAPVista.com_MainLogo_Orange.webp"
             alt="SAPVISTA logo"
@@ -190,7 +192,10 @@ export default function App() {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6">
+      <main className="w-full py-6">
+        <div className="grid grid-cols-[20%_40%_40%] gap-4">
+          {/* Left column — server nodes */}
+          <div>
         {isLoading && <p className="text-sm text-slate-300">Loading servers...</p>}
 
         {!isLoading && loadError && (
@@ -216,66 +221,82 @@ export default function App() {
               return (
                 <article
                   key={rowKey}
-                  className={`rounded-xl border p-4 transition-colors ${
-                    isSending ? "border-green-500 bg-green-500/10 text-green-100" : "border-slate-800 bg-slate-900/60"
+                  className={`rounded-xl border p-2 transition-colors ${
+                    isSending ? "border-green-500 bg-green-500/10 text-green-100" : "border-slate-800 bg-slate-800"
                   }`}
                 >
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="flex min-w-0 items-center gap-4">
-                      <button
-                        type="button"
-                        onDoubleClick={() => handleServerAction(server, rowKey)}
-                        disabled={action.status === "sending"}
-                        title="Double-click to send request"
-                        className={`flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-full border transition disabled:cursor-not-allowed disabled:opacity-60 ${
-                          isSending
-                            ? "border-green-400 bg-green-500/20 text-green-100"
-                            : "border-slate-700 bg-slate-800 hover:border-slate-500"
-                        }`}
+                  <div className="flex items-center gap-4">
+                    <button
+                      type="button"
+                      onDoubleClick={() => handleServerAction(server, rowKey)}
+                      disabled={action.status === "sending"}
+                      title="Double-click to send request"
+                      className={`flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full border transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                        isSending
+                          ? "border-green-400 bg-green-500/20 text-green-100"
+                          : "border-slate-700 bg-slate-800 hover:border-slate-500"
+                      }`}
+                    >
+                      <svg
+                        viewBox="0 0 24 24"
+                        className={`h-5 w-5 ${isSending ? "text-green-100" : "text-slate-200"}`}
+                        aria-hidden="true"
                       >
-                        <svg
-                          viewBox="0 0 24 24"
-                          className={`h-7 w-7 ${isSending ? "text-green-100" : "text-slate-200"}`}
-                          aria-hidden="true"
-                        >
-                          <path
-                            fill="currentColor"
-                            d="M4 3h16a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Zm0 11h16a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1Zm3 2a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm0-11a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z"
-                          />
-                        </svg>
-                      </button>
+                        <path
+                          fill="currentColor"
+                          d="M4 3h16a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Zm0 11h16a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1Zm3 2a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm0-11a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z"
+                        />
+                      </svg>
+                    </button>
 
-                      <div className="min-w-0">
-                        <p className={`truncate text-base font-medium ${isSending ? "text-green-100" : "text-slate-100"}`}>
-                          {server.domainName}
-                        </p>
-                        <p className={`truncate text-sm ${isSending ? "text-green-200" : "text-slate-400"}`}>
-                          {server.ipAddress}
-                        </p>
-                      </div>
+                    <div className="min-w-0 flex-1">
+                      <p className={`truncate text-base font-medium ${isSending ? "text-green-100" : "text-slate-100"}`}>
+                        {server.domainName}
+                      </p>
+                      <p className={`truncate text-sm ${
+                        action.status === "sending" ? "text-green-200" :
+                        action.status === "error" ? "text-red-300" :
+                        action.status === "success" ? "text-green-300" :
+                        "text-slate-400"
+                      }`}>
+                        {action.status === "sending" ? "Submitting..." :
+                         action.status === "error" ? action.message :
+                         action.status === "success" ? "Success" :
+                         "Ready"}
+                      </p>
                     </div>
-
-                    <p className={`text-xs ${isSending ? "text-green-200" : "text-slate-400"}`}>
-                      Double-click icon to submit serverConfigId
-                    </p>
                   </div>
 
-                  {action.status === "sending" && <p className="mt-3 text-sm text-green-200">Submitting...</p>}
 
-                  {action.status === "error" && (
-                    <p className="mt-3 rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-300">{action.message}</p>
-                  )}
-
-                  {action.status === "success" && (
-                    <pre className="mt-3 overflow-x-auto rounded-md bg-slate-950 px-3 py-2 text-xs text-green-300">
-                      {action.message}
-                    </pre>
-                  )}
                 </article>
               );
             })}
           </div>
         )}
+          </div>
+          {/* Middle column — response panel */}
+          <div className="px-4">
+            {selectedRowKey && (() => {
+              const sel = actionsByRow[selectedRowKey] ?? { status: "idle", message: "" };
+              const selServer = servers.find((s, i) => String(s.serverConfigId ?? `${s.domainName}-${i}`) === selectedRowKey);
+              return (
+                <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+                  {selServer && (
+                    <p className="mb-3 text-sm font-medium text-slate-300">{selServer.domainName}</p>
+                  )}
+                  {sel.status === "success" && (
+                    <pre className="break-words whitespace-pre-wrap rounded-md bg-slate-950 px-3 py-2 text-xs text-green-300">{sel.message}</pre>
+                  )}
+                  {sel.status === "error" && (
+                    <pre className="break-words whitespace-pre-wrap rounded-md bg-red-500/10 px-3 py-2 text-xs text-red-300">{sel.message}</pre>
+                  )}
+                </div>
+              );
+            })()}
+          </div>
+          {/* Right column */}
+          <div />
+        </div>
       </main>
     </div>
   );
