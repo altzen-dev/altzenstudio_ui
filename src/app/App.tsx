@@ -98,6 +98,11 @@ export default function App() {
   const [loadError, setLoadError] = useState("");
   const [actionsByRow, setActionsByRow] = useState<Record<string, ServerActionState>>({});
   const [selectedRowKey, setSelectedRowKey] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const filteredServers = servers.filter((server) =>
+    server.domainName.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   useEffect(() => {
     const fetchServers = async () => {
@@ -180,121 +185,146 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100">
-      <header className="sticky top-0 z-10 border-b border-slate-800 bg-slate-950/95 backdrop-blur">
+    <div className="flex h-screen flex-col overflow-hidden bg-white text-slate-900">
+      <header className="sticky top-0 z-10 border-b-[0.25px] border-slate-200 bg-white/95 backdrop-blur">
+
         <div className="flex w-full items-center gap-4 py-4">
-          <img
-            src="https://cdn.prod.website-files.com/64b4def37ae684b348f630c4/64bf7db761bc3b0f8b6da64d_SAPVista.com_MainLogo_Orange.webp"
-            alt="SAPVISTA logo"
-            className="h-auto w-[clamp(140px,22vw,320px)] max-w-full rounded-none border border-slate-700 bg-slate-900 p-1 object-contain"
-          />
-          <h1 className="text-left text-2xl font-semibold tracking-wide sm:text-3xl">Cockpit</h1>
+          <h1 className="text-left text-2xl font-semibold tracking-wide sm:text-3xl">
+            <span className="text-[#e8471b]">Altzen</span> <span className="text-slate-900">Cockpit</span>
+          </h1>
         </div>
       </header>
 
-      <main className="w-full py-6">
-        <div className="grid grid-cols-[20%_40%_40%] gap-4">
-          {/* Left column — server nodes */}
-          <div>
-        {isLoading && <p className="text-sm text-slate-300">Loading servers...</p>}
+      <main className="min-h-0 flex-1 w-full overflow-hidden">
+        <div className="grid h-full grid-cols-[5%_20%_40%_35%] items-stretch">
+          {/* First column */}
+          <div className="h-full border-r-[0.25px] border-slate-200 flex flex-col items-center pt-3">
+            <img
+              src="/icons/copilot.png"
+              alt="icon"
+              className="h-8 w-8 rounded object-cover"
+            />
+          </div>
+          {/* Second column — server nodes */}
+          <div className="h-full border-r-[0.25px] border-slate-200 flex flex-col">
+            {/* Search bar */}
+            {!isLoading && !loadError && servers.length > 0 && (
+              <div className="border-b-[0.25px] border-slate-200 px-2 py-2">
+                <input
+                  type="text"
+                  placeholder="Search domains..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full rounded border-[0.25px] border-slate-200 bg-white px-3 py-1 text-sm text-black placeholder-slate-500 focus:outline-none"
+                />
+              </div>
+            )}
+            {/* Content area */}
+            <div className="min-h-0 flex-1 overflow-y-auto">
+        {isLoading && <p className="text-sm text-slate-300 px-4 py-4">Loading servers...</p>}
 
         {!isLoading && loadError && (
-          <p className="rounded-lg border border-red-500/50 bg-red-500/10 px-4 py-3 text-sm text-red-300">{loadError}</p>
+          <p className="rounded-lg border-[0.25px] border-slate-200 bg-red-500/10 px-4 py-3 text-sm text-red-300 m-4">{loadError}</p>
         )}
 
         {!isLoading && !loadError && servers.length === 0 && (
-          <p className="text-sm text-slate-300">No servers were returned by the API.</p>
+          <p className="text-sm text-slate-300 px-4 py-4">No servers were returned by the API.</p>
         )}
 
         {!isLoading && !loadError && servers.length > 0 && (
-          <div className="grid gap-4">
-            {servers.map((server, index) => {
-              const rowKey = String(server.serverConfigId ?? `${server.domainName}-${index}`);
-              const action =
-                actionsByRow[rowKey] ??
-                ({
-                  status: "idle",
-                  message: ""
-                } satisfies ServerActionState);
-              const isSending = action.status === "sending";
+          <div>
+            {filteredServers.length === 0 ? (
+              <p className="text-sm text-slate-500 px-4 py-4">No matching domains found.</p>
+            ) : (
+            <table className="w-full table-fixed border-collapse text-left text-sm">
+              <colgroup>
+                <col className="w-[55%]" />
+                <col className="w-[45%]" />
+              </colgroup>
+              <thead>
+                <tr className="border-b-[0.25px] border-slate-200 bg-slate-900/70 text-slate-300">
+                  <th className="px-2 py-2 font-medium">Domain</th>
+                  <th className="px-2 py-2 font-medium">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredServers.map((server, index) => {
+                const rowKey = String(server.serverConfigId ?? `${server.domainName}-${index}`);
+                const action =
+                  actionsByRow[rowKey] ??
+                  ({
+                    status: "idle",
+                    message: ""
+                  } satisfies ServerActionState);
+                const isSending = action.status === "sending";
 
-              return (
-                <article
-                  key={rowKey}
-                  className={`rounded-xl border p-2 transition-colors ${
-                    isSending ? "border-green-500 bg-green-500/10 text-green-100" : "border-slate-800 bg-slate-800"
-                  }`}
-                >
-                  <div className="flex items-center gap-4">
-                    <button
-                      type="button"
-                      onDoubleClick={() => handleServerAction(server, rowKey)}
-                      disabled={action.status === "sending"}
-                      title="Double-click to send request"
-                      className={`flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full border transition disabled:cursor-not-allowed disabled:opacity-60 ${
-                        isSending
-                          ? "border-green-400 bg-green-500/20 text-green-100"
-                          : "border-slate-700 bg-slate-800 hover:border-slate-500"
-                      }`}
+                return (
+                  <tr
+                    key={rowKey}
+                    onDoubleClick={() => handleServerAction(server, rowKey)}
+                    className={`cursor-pointer border-b-[0.25px] border-slate-200 ${
+                      isSending ? "bg-green-500/10 text-black" : "bg-transparent hover:bg-slate-800/60 text-black"
+                    }`}
+                    title="Double-click anywhere on the row to submit"
+                  >
+                    <td className="break-words px-2 py-2 align-top text-black">
+                      {server.domainName}
+                    </td>
+                    <td
+                      className="break-words px-2 py-2 align-top text-black"
                     >
-                      <svg
-                        viewBox="0 0 24 24"
-                        className={`h-5 w-5 ${isSending ? "text-green-100" : "text-slate-200"}`}
-                        aria-hidden="true"
-                      >
-                        <path
-                          fill="currentColor"
-                          d="M4 3h16a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Zm0 11h16a1 1 0 0 1 1 1v5a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-5a1 1 0 0 1 1-1Zm3 2a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm0-11a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z"
-                        />
-                      </svg>
-                    </button>
-
-                    <div className="min-w-0 flex-1">
-                      <p className={`truncate text-base font-medium ${isSending ? "text-green-100" : "text-slate-100"}`}>
-                        {server.domainName}
-                      </p>
-                      <p className={`truncate text-sm ${
-                        action.status === "sending" ? "text-green-200" :
-                        action.status === "error" ? "text-red-300" :
-                        action.status === "success" ? "text-green-300" :
-                        "text-slate-400"
-                      }`}>
-                        {action.status === "sending" ? "Submitting..." :
-                         action.status === "error" ? action.message :
-                         action.status === "success" ? "Success" :
-                         "Ready"}
-                      </p>
-                    </div>
-                  </div>
-
-
-                </article>
-              );
-            })}
-          </div>
+                      {action.status === "sending"
+                        ? "Submitting..."
+                        : action.status === "error"
+                          ? action.message
+                          : action.status === "success"
+                            ? "Success"
+                            : "Ready"}
+                    </td>
+                  </tr>
+                );
+              })}
+              </tbody>
+            </table>
+            )}
+            </div>
         )}
+            </div>
           </div>
-          {/* Middle column — response panel */}
-          <div className="px-4">
-            {selectedRowKey && (() => {
-              const sel = actionsByRow[selectedRowKey] ?? { status: "idle", message: "" };
-              const selServer = servers.find((s, i) => String(s.serverConfigId ?? `${s.domainName}-${i}`) === selectedRowKey);
-              return (
-                <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-                  {selServer && (
-                    <p className="mb-3 text-sm font-medium text-slate-300">{selServer.domainName}</p>
-                  )}
-                  {sel.status === "success" && (
-                    <pre className="break-words whitespace-pre-wrap rounded-md bg-slate-950 px-3 py-2 text-xs text-green-300">{sel.message}</pre>
-                  )}
-                  {sel.status === "error" && (
-                    <pre className="break-words whitespace-pre-wrap rounded-md bg-red-500/10 px-3 py-2 text-xs text-red-300">{sel.message}</pre>
-                  )}
-                </div>
-              );
-            })()}
+          {/* Third column — response panel */}
+          <div className="flex h-full flex-col border-r-[0.25px] border-slate-200">
+            {/* Menu bar */}
+            <div className="flex border-b-[0.25px] border-slate-200">
+              <button className="w-fit whitespace-nowrap px-3 py-1.5 text-xs font-medium text-black hover:bg-slate-200 focus:outline-none">SAP Basis</button>
+              <button className="w-fit whitespace-nowrap border-l-[0.25px] border-slate-200 px-3 py-1.5 text-xs font-medium text-black hover:bg-slate-200 focus:outline-none">Actions</button>
+            </div>
+            {/* Grid content area */}
+            <div className="grid flex-1 min-h-0 grid-rows-[70%_30%]">
+              <div className="min-h-0 overflow-y-auto px-4 py-4">
+                {selectedRowKey && (() => {
+                  const sel = actionsByRow[selectedRowKey] ?? { status: "idle", message: "" };
+                  const selServer = servers.find((s, i) => String(s.serverConfigId ?? `${s.domainName}-${i}`) === selectedRowKey);
+                  return (
+                    <div className="rounded-xl border-[0.25px] border-slate-200 bg-slate-900/60 p-4">
+                      {selServer && (
+                        <p className="mb-3 text-sm font-medium text-slate-300">{selServer.domainName}</p>
+                      )}
+                      {sel.status === "success" && (
+                        <pre className="break-words whitespace-pre-wrap rounded-md bg-slate-950 px-3 py-2 text-xs text-green-300">{sel.message}</pre>
+                      )}
+                      {sel.status === "error" && (
+                        <pre className="break-words whitespace-pre-wrap rounded-md bg-red-500/10 px-3 py-2 text-xs text-red-300">{sel.message}</pre>
+                      )}
+                    </div>
+                  );
+                })()}
+              </div>
+              <div className="border-t-[0.25px] border-slate-200 px-4 py-4">
+                <h2 className="text-sm font-semibold text-black">System Properties</h2>
+              </div>
+            </div>
           </div>
-          {/* Right column */}
+          {/* Fourth column */}
           <div />
         </div>
       </main>
