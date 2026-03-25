@@ -99,6 +99,8 @@ export default function App() {
   const [actionsByRow, setActionsByRow] = useState<Record<string, ServerActionState>>({});
   const [selectedRowKey, setSelectedRowKey] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [activePage, setActivePage] = useState<"dashboard" | "settings" | "about">("dashboard");
+  const [isSapBasisMenuOpen, setIsSapBasisMenuOpen] = useState(false);
 
   const filteredServers = servers.filter((server) =>
     server.domainName.toLowerCase().includes(searchQuery.toLowerCase())
@@ -110,7 +112,12 @@ export default function App() {
       setLoadError("");
 
       try {
-        const response = await fetch("http://localhost:8082/api/v1/hbs/servers");
+        const response = await fetch("http://localhost:8084/api/v1/servers/summaries", {
+          method: "GET",
+          headers: {
+            "Accept": "application/json"
+          }
+        });
         const payload = await getResponsePayload(response);
 
         if (!response.ok) {
@@ -184,10 +191,80 @@ export default function App() {
     }
   };
 
+  const handleHanaBackup = async () => {
+    if (!selectedRowKey) {
+      return;
+    }
+
+    const selectedIndex = servers.findIndex(
+      (server, index) => String(server.serverConfigId ?? `${server.domainName}-${index}`) === selectedRowKey
+    );
+
+    if (selectedIndex === -1) {
+      return;
+    }
+
+    const selectedServer = servers[selectedIndex];
+    const rowKey = String(selectedServer.serverConfigId ?? `${selectedServer.domainName}-${selectedIndex}`);
+
+    if (selectedServer.serverConfigId === null) {
+      setActionsByRow((current) => ({
+        ...current,
+        [rowKey]: {
+          status: "error",
+          message: "serverId is missing for this row."
+        }
+      }));
+      return;
+    }
+
+    setActionsByRow((current) => ({
+      ...current,
+      [rowKey]: {
+        status: "sending",
+        message: "Submitting HANA Backup request..."
+      }
+    }));
+
+    try {
+      const response = await fetch("http://localhost:8082/api/v1/hbs", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          serverId: selectedServer.serverConfigId
+        })
+      });
+
+      const payload = await getResponsePayload(response);
+      if (!response.ok) {
+        throw new Error(formatPayload(payload) || `Request failed with status ${response.status}`);
+      }
+
+      setActionsByRow((current) => ({
+        ...current,
+        [rowKey]: {
+          status: "success",
+          message: formatPayload(payload)
+        }
+      }));
+    } catch (error) {
+      setActionsByRow((current) => ({
+        ...current,
+        [rowKey]: {
+          status: "error",
+          message: error instanceof Error ? error.message : "Failed to send request."
+        }
+      }));
+    } finally {
+      setIsSapBasisMenuOpen(false);
+    }
+  };
+
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-white text-slate-900">
       <header className="sticky top-0 z-10 border-b-[0.25px] border-slate-200 bg-white/95 backdrop-blur">
-
         <div className="flex w-full items-center gap-4 py-4">
           <h1 className="text-left text-2xl font-semibold tracking-wide sm:text-3xl">
             <span className="text-[#e8471b]">Altzen</span> <span className="text-slate-900">Cockpit</span>
@@ -196,136 +273,254 @@ export default function App() {
       </header>
 
       <main className="min-h-0 flex-1 w-full overflow-hidden">
-        <div className="grid h-full grid-cols-[5%_20%_40%_35%] items-stretch">
-          {/* First column */}
-          <div className="h-full border-r-[0.25px] border-slate-200 flex flex-col items-center pt-3">
-            <img
-              src="/icons/copilot.png"
-              alt="icon"
-              className="h-8 w-8 rounded object-cover"
-            />
-          </div>
-          {/* Second column — server nodes */}
-          <div className="h-full border-r-[0.25px] border-slate-200 flex flex-col">
-            {/* Search bar */}
-            {!isLoading && !loadError && servers.length > 0 && (
-              <div className="border-b-[0.25px] border-slate-200 px-2 py-2">
-                <input
-                  type="text"
-                  placeholder="Search domains..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full rounded border-[0.25px] border-slate-200 bg-white px-3 py-1 text-sm text-black placeholder-slate-500 focus:outline-none"
-                />
-              </div>
-            )}
-            {/* Content area */}
-            <div className="min-h-0 flex-1 overflow-y-auto">
-        {isLoading && <p className="text-sm text-slate-300 px-4 py-4">Loading servers...</p>}
-
-        {!isLoading && loadError && (
-          <p className="rounded-lg border-[0.25px] border-slate-200 bg-red-500/10 px-4 py-3 text-sm text-red-300 m-4">{loadError}</p>
-        )}
-
-        {!isLoading && !loadError && servers.length === 0 && (
-          <p className="text-sm text-slate-300 px-4 py-4">No servers were returned by the API.</p>
-        )}
-
-        {!isLoading && !loadError && servers.length > 0 && (
-          <div>
-            {filteredServers.length === 0 ? (
-              <p className="text-sm text-slate-500 px-4 py-4">No matching domains found.</p>
-            ) : (
-            <table className="w-full table-fixed border-collapse text-left text-sm">
-              <colgroup>
-                <col className="w-[55%]" />
-                <col className="w-[45%]" />
-              </colgroup>
-              <thead>
-                <tr className="border-b-[0.25px] border-slate-200 bg-slate-900/70 text-slate-300">
-                  <th className="px-2 py-2 font-medium">Domain</th>
-                  <th className="px-2 py-2 font-medium">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredServers.map((server, index) => {
-                const rowKey = String(server.serverConfigId ?? `${server.domainName}-${index}`);
-                const action =
-                  actionsByRow[rowKey] ??
-                  ({
-                    status: "idle",
-                    message: ""
-                  } satisfies ServerActionState);
-                const isSending = action.status === "sending";
-
-                return (
-                  <tr
-                    key={rowKey}
-                    onDoubleClick={() => handleServerAction(server, rowKey)}
-                    className={`cursor-pointer border-b-[0.25px] border-slate-200 ${
-                      isSending ? "bg-green-500/10 text-black" : "bg-transparent hover:bg-slate-800/60 text-black"
-                    }`}
-                    title="Double-click anywhere on the row to submit"
-                  >
-                    <td className="break-words px-2 py-2 align-top text-black">
-                      {server.domainName}
-                    </td>
-                    <td
-                      className="break-words px-2 py-2 align-top text-black"
-                    >
-                      {action.status === "sending"
-                        ? "Submitting..."
-                        : action.status === "error"
-                          ? action.message
-                          : action.status === "success"
-                            ? "Success"
-                            : "Ready"}
-                    </td>
-                  </tr>
-                );
-              })}
-              </tbody>
-            </table>
-            )}
-            </div>
-        )}
+        <div className="grid h-full grid-cols-[5%_95%] items-stretch">
+          {/* Left Sidebar - 5% (Fixed Navigation) */}
+          <div className="h-full border-r-[0.25px] border-slate-200 flex flex-col items-center pt-3 gap-4 bg-slate-50">
+            <button
+              onClick={() => setActivePage("dashboard")}
+              className="p-1 rounded hover:bg-slate-200 transition-colors cursor-pointer"
+              title="Dashboard"
+            >
+              <img
+                src="/icons/copilot.png"
+                alt="icon"
+                className="h-8 w-8 rounded object-cover"
+              />
+            </button>
+            <div className="flex flex-col gap-2 w-full items-center">
+              <button
+                onClick={() => setActivePage("dashboard")}
+                className={`w-10 h-10 rounded flex items-center justify-center transition-colors ${
+                  activePage === "dashboard"
+                    ? "bg-[#e8471b] text-white"
+                    : "hover:bg-slate-200 text-slate-600"
+                }`}
+                title="Dashboard"
+              >
+                📊
+              </button>
+              <button
+                onClick={() => setActivePage("settings")}
+                className={`w-10 h-10 rounded flex items-center justify-center transition-colors ${
+                  activePage === "settings"
+                    ? "bg-[#e8471b] text-white"
+                    : "hover:bg-slate-200 text-slate-600"
+                }`}
+                title="Settings"
+              >
+                ⚙️
+              </button>
+              <button
+                onClick={() => setActivePage("about")}
+                className={`w-10 h-10 rounded flex items-center justify-center transition-colors ${
+                  activePage === "about"
+                    ? "bg-[#e8471b] text-white"
+                    : "hover:bg-slate-200 text-slate-600"
+                }`}
+                title="About"
+              >
+                ℹ️
+              </button>
             </div>
           </div>
-          {/* Third column — response panel */}
-          <div className="flex h-full flex-col border-r-[0.25px] border-slate-200">
-            {/* Menu bar */}
-            <div className="flex border-b-[0.25px] border-slate-200">
-              <button className="w-fit whitespace-nowrap px-3 py-1.5 text-xs font-medium text-black hover:bg-slate-200 focus:outline-none">SAP Basis</button>
-              <button className="w-fit whitespace-nowrap border-l-[0.25px] border-slate-200 px-3 py-1.5 text-xs font-medium text-black hover:bg-slate-200 focus:outline-none">Actions</button>
-            </div>
-            {/* Grid content area */}
-            <div className="grid flex-1 min-h-0 grid-rows-[70%_30%]">
-              <div className="min-h-0 overflow-y-auto px-4 py-4">
-                {selectedRowKey && (() => {
-                  const sel = actionsByRow[selectedRowKey] ?? { status: "idle", message: "" };
-                  const selServer = servers.find((s, i) => String(s.serverConfigId ?? `${s.domainName}-${i}`) === selectedRowKey);
-                  return (
-                    <div className="rounded-xl border-[0.25px] border-slate-200 bg-slate-900/60 p-4">
-                      {selServer && (
-                        <p className="mb-3 text-sm font-medium text-slate-300">{selServer.domainName}</p>
-                      )}
-                      {sel.status === "success" && (
-                        <pre className="break-words whitespace-pre-wrap rounded-md bg-slate-950 px-3 py-2 text-xs text-green-300">{sel.message}</pre>
-                      )}
-                      {sel.status === "error" && (
-                        <pre className="break-words whitespace-pre-wrap rounded-md bg-red-500/10 px-3 py-2 text-xs text-red-300">{sel.message}</pre>
+
+          {/* Right Content Area - 95% (Dynamic Content) */}
+          <div className="h-full overflow-hidden">
+            {/* Dashboard Page */}
+            {activePage === "dashboard" && (
+              <div className="h-full grid grid-cols-[20%_40%_40%] items-stretch">
+                {/* Server nodes column */}
+                <div className="h-full border-r-[0.25px] border-slate-200 flex flex-col">
+                  {/* Search bar */}
+                  {!isLoading && !loadError && servers.length > 0 && (
+                    <div className="border-b-[0.25px] border-slate-200 px-2 py-2">
+                      <input
+                        type="text"
+                        placeholder="Search domains..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="w-full rounded border-[0.25px] border-slate-200 bg-white px-3 py-1 text-sm text-black placeholder-slate-500 focus:outline-none"
+                      />
+                    </div>
+                  )}
+                  {/* Content area */}
+                  <div className="min-h-0 flex-1 overflow-y-auto">
+                    {isLoading && <p className="text-sm text-slate-300 px-4 py-4">Loading servers...</p>}
+
+                    {!isLoading && loadError && (
+                      <p className="rounded-lg border-[0.25px] border-slate-200 bg-red-500/10 px-4 py-3 text-sm text-red-300 m-4">{loadError}</p>
+                    )}
+
+                    {!isLoading && !loadError && servers.length === 0 && (
+                      <p className="text-sm text-slate-300 px-4 py-4">No servers were returned by the API.</p>
+                    )}
+
+                    {!isLoading && !loadError && servers.length > 0 && (
+                      <div>
+                        {filteredServers.length === 0 ? (
+                          <p className="text-sm text-slate-500 px-4 py-4">No matching domains found.</p>
+                        ) : (
+                          <table className="w-full table-fixed border-collapse text-left text-sm">
+                            <colgroup>
+                              <col className="w-[55%]" />
+                              <col className="w-[45%]" />
+                            </colgroup>
+                            <thead>
+                              <tr className="border-b-[0.25px] border-slate-200 bg-slate-900/70 text-slate-300">
+                                <th className="px-2 py-2 font-medium">Domain</th>
+                                <th className="px-2 py-2 font-medium">Status</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {filteredServers.map((server, index) => {
+                                const rowKey = String(server.serverConfigId ?? `${server.domainName}-${index}`);
+                                const action =
+                                  actionsByRow[rowKey] ??
+                                  ({
+                                    status: "idle",
+                                    message: ""
+                                  } satisfies ServerActionState);
+                                const isSending = action.status === "sending";
+
+                                return (
+                                  <tr
+                                    key={rowKey}
+                                    onClick={() => setSelectedRowKey(rowKey)}
+                                    onDoubleClick={() => handleServerAction(server, rowKey)}
+                                    className={`cursor-pointer border-b-[0.25px] border-slate-200 ${
+                                      isSending
+                                        ? "bg-green-500/10 text-black"
+                                        : selectedRowKey === rowKey
+                                          ? "bg-slate-200 text-black"
+                                          : "bg-transparent hover:bg-slate-800/60 text-black"
+                                    }`}
+                                    title="Double-click anywhere on the row to submit"
+                                  >
+                                    <td className="break-words px-2 py-2 align-top text-black">
+                                      {server.domainName}
+                                    </td>
+                                    <td className="break-words px-2 py-2 align-top text-black">
+                                      {action.status === "sending"
+                                        ? "Submitting..."
+                                        : action.status === "error"
+                                          ? action.message
+                                          : action.status === "success"
+                                            ? "Success"
+                                            : "Ready"}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Response panel column */}
+                <div className="flex h-full flex-col border-r-[0.25px] border-slate-200">
+                  {/* Menu bar */}
+                  <div className="relative flex border-b-[0.25px] border-slate-200">
+                    <div className="relative">
+                      <button
+                        onClick={() => setIsSapBasisMenuOpen((current) => !current)}
+                        className="w-fit whitespace-nowrap px-3 py-1.5 text-xs font-medium text-black hover:bg-slate-200 focus:outline-none"
+                      >
+                        SAP Basis
+                      </button>
+                      {isSapBasisMenuOpen && (
+                        <div className="absolute left-0 top-full z-20 min-w-[140px] border-[0.25px] border-slate-200 bg-white shadow-md">
+                          <button
+                            onClick={handleHanaBackup}
+                            className="block w-full px-3 py-2 text-left text-xs text-black hover:bg-slate-100"
+                          >
+                            HANA Backup
+                          </button>
+                          <button
+                            onClick={() => setIsSapBasisMenuOpen(false)}
+                            className="block w-full border-t-[0.25px] border-slate-200 px-3 py-2 text-left text-xs text-black hover:bg-slate-100"
+                          >
+                            Install
+                          </button>
+                        </div>
                       )}
                     </div>
-                  );
-                })()}
+                    <button className="w-fit whitespace-nowrap border-l-[0.25px] border-slate-200 px-3 py-1.5 text-xs font-medium text-black hover:bg-slate-200 focus:outline-none">Actions</button>
+                  </div>
+                  {/* Grid content area */}
+                  <div className="grid flex-1 min-h-0 grid-rows-[70%_30%]">
+                    <div className="min-h-0 overflow-y-auto px-4 py-4" />
+                    <div className="border-t-[0.25px] border-slate-200 px-4 py-4">
+                      <h2 className="text-sm font-semibold text-black">System Properties</h2>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Empty fourth column */}
+                <div />
               </div>
-              <div className="border-t-[0.25px] border-slate-200 px-4 py-4">
-                <h2 className="text-sm font-semibold text-black">System Properties</h2>
+            )}
+
+            {/* Settings Page */}
+            {activePage === "settings" && (
+              <div className="h-full overflow-y-auto px-8 py-8">
+                <div className="max-w-2xl">
+                  <h2 className="text-3xl font-bold text-slate-900 mb-6">Settings</h2>
+                  <div className="space-y-6">
+                    <div className="border-[0.25px] border-slate-200 rounded-lg p-6 bg-slate-50">
+                      <h3 className="text-lg font-semibold text-slate-900 mb-2">Server Configuration</h3>
+                      <p className="text-sm text-slate-600 mb-4">Configure API endpoints and connection settings</p>
+                      <button className="px-4 py-2 bg-[#e8471b] text-white rounded hover:bg-[#c73a14] transition-colors">
+                        Configure Servers
+                      </button>
+                    </div>
+                    <div className="border-[0.25px] border-slate-200 rounded-lg p-6 bg-slate-50">
+                      <h3 className="text-lg font-semibold text-slate-900 mb-2">Display Preferences</h3>
+                      <p className="text-sm text-slate-600 mb-4">Customize the appearance and layout</p>
+                      <button className="px-4 py-2 bg-[#e8471b] text-white rounded hover:bg-[#c73a14] transition-colors">
+                        Customize Theme
+                      </button>
+                    </div>
+                    <div className="border-[0.25px] border-slate-200 rounded-lg p-6 bg-slate-50">
+                      <h3 className="text-lg font-semibold text-slate-900 mb-2">Advanced Settings</h3>
+                      <p className="text-sm text-slate-600 mb-4">Advanced options for power users</p>
+                      <button className="px-4 py-2 bg-[#e8471b] text-white rounded hover:bg-[#c73a14] transition-colors">
+                        Advanced Options
+                      </button>
+                    </div>
+                  </div>
+                </div>
               </div>
-            </div>
+            )}
+
+            {/* About Page */}
+            {activePage === "about" && (
+              <div className="h-full overflow-y-auto px-8 py-8">
+                <div className="max-w-2xl">
+                  <h2 className="text-3xl font-bold text-slate-900 mb-6">About Altzen Cockpit</h2>
+                  <div className="space-y-4 text-slate-700">
+                    <p className="text-base">
+                      Altzen Cockpit is a comprehensive server management and monitoring platform designed to streamline your infrastructure operations.
+                    </p>
+                    <h3 className="text-lg font-semibold text-slate-900 mt-6 mb-2">Features</h3>
+                    <ul className="list-disc list-inside space-y-2 text-sm">
+                      <li>Real-time server monitoring and status tracking</li>
+                      <li>Centralized server configuration management</li>
+                      <li>Quick access to SAP Basis operations</li>
+                      <li>Intuitive dashboard for system overview</li>
+                      <li>Advanced filtering and search capabilities</li>
+                    </ul>
+                    <h3 className="text-lg font-semibold text-slate-900 mt-6 mb-2">Version</h3>
+                    <p className="text-sm">Version 1.0.0</p>
+                    <h3 className="text-lg font-semibold text-slate-900 mt-6 mb-2">Support</h3>
+                    <p className="text-sm">For support and inquiries, please contact the Altzen team.</p>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
-          {/* Fourth column */}
-          <div />
         </div>
       </main>
     </div>
