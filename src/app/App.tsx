@@ -98,9 +98,12 @@ export default function App() {
   const [loadError, setLoadError] = useState("");
   const [actionsByRow, setActionsByRow] = useState<Record<string, ServerActionState>>({});
   const [selectedRowKey, setSelectedRowKey] = useState<string | null>(null);
+  const [selectedServer, setSelectedServer] = useState<ServerRow | null>(null);
+  const [backupMenuError, setBackupMenuError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [activePage, setActivePage] = useState<"dashboard" | "settings" | "about">("dashboard");
   const [isSapBasisMenuOpen, setIsSapBasisMenuOpen] = useState(false);
+
 
   const filteredServers = servers.filter((server) =>
     server.domainName.toLowerCase().includes(searchQuery.toLowerCase())
@@ -192,20 +195,14 @@ export default function App() {
   };
 
   const handleHanaBackup = async () => {
-    if (!selectedRowKey) {
+    if (!selectedRowKey || !selectedServer) {
+      setBackupMenuError("OOPS You have not selected any server yet");
       return;
     }
 
-    const selectedIndex = servers.findIndex(
-      (server, index) => String(server.serverConfigId ?? `${server.domainName}-${index}`) === selectedRowKey
-    );
+    setBackupMenuError("");
 
-    if (selectedIndex === -1) {
-      return;
-    }
-
-    const selectedServer = servers[selectedIndex];
-    const rowKey = String(selectedServer.serverConfigId ?? `${selectedServer.domainName}-${selectedIndex}`);
+    const rowKey = selectedRowKey;
 
     if (selectedServer.serverConfigId === null) {
       setActionsByRow((current) => ({
@@ -227,14 +224,11 @@ export default function App() {
     }));
 
     try {
-      const response = await fetch("http://localhost:8082/api/v1/hbs", {
+      const response = await fetch(`http://localhost:8082/api/v1/hbs/${encodeURIComponent(String(selectedServer.serverConfigId))}`, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          serverId: selectedServer.serverConfigId
-        })
+          "Accept": "application/json"
+        }
       });
 
       const payload = await getResponsePayload(response);
@@ -366,7 +360,7 @@ export default function App() {
                               <col className="w-[45%]" />
                             </colgroup>
                             <thead>
-                              <tr className="border-b-[0.25px] border-slate-200 bg-slate-900/70 text-slate-300">
+                              <tr className="border-b-[0.25px] border-slate-200 bg-[#f1f5f9] text-slate-700">
                                 <th className="px-2 py-2 font-medium">Domain</th>
                                 <th className="px-2 py-2 font-medium">Status</th>
                               </tr>
@@ -385,7 +379,11 @@ export default function App() {
                                 return (
                                   <tr
                                     key={rowKey}
-                                    onClick={() => setSelectedRowKey(rowKey)}
+                                    onClick={() => {
+                                      setSelectedRowKey(rowKey);
+                                      setSelectedServer(server);
+                                      setBackupMenuError("");
+                                    }}
                                     onDoubleClick={() => handleServerAction(server, rowKey)}
                                     className={`cursor-pointer border-b-[0.25px] border-slate-200 ${
                                       isSending
@@ -422,36 +420,59 @@ export default function App() {
                 {/* Response panel column */}
                 <div className="flex h-full flex-col border-r-[0.25px] border-slate-200">
                   {/* Menu bar */}
-                  <div className="relative flex border-b-[0.25px] border-slate-200">
-                    <div className="relative">
-                      <button
-                        onClick={() => setIsSapBasisMenuOpen((current) => !current)}
-                        className="w-fit whitespace-nowrap px-3 py-1.5 text-xs font-medium text-black hover:bg-slate-200 focus:outline-none"
-                      >
+                  <div className="flex gap-1 border-b-[0.25px] border-slate-200 bg-slate-100 px-1">
+                    <div
+                      className="relative"
+                      onMouseEnter={() => setIsSapBasisMenuOpen(true)}
+                      onMouseLeave={() => setIsSapBasisMenuOpen(false)}
+                    >
+                      <button className="whitespace-nowrap rounded px-3 py-1.5 text-xs font-medium text-black hover:bg-slate-200 focus:outline-none">
                         SAP Basis
                       </button>
                       {isSapBasisMenuOpen && (
-                        <div className="absolute left-0 top-full z-20 min-w-[140px] border-[0.25px] border-slate-200 bg-white shadow-md">
-                          <button
-                            onClick={handleHanaBackup}
-                            className="block w-full px-3 py-2 text-left text-xs text-black hover:bg-slate-100"
-                          >
-                            HANA Backup
-                          </button>
-                          <button
-                            onClick={() => setIsSapBasisMenuOpen(false)}
-                            className="block w-full border-t-[0.25px] border-slate-200 px-3 py-2 text-left text-xs text-black hover:bg-slate-100"
-                          >
-                            Install
-                          </button>
+                        <div className="absolute left-0 top-full z-20 min-w-[140px] border-[0.25px] border-slate-300 bg-slate-100 shadow-md">
+                        <button
+                          onClick={handleHanaBackup}
+                          className="block w-full px-3 py-2 text-left text-xs text-black hover:bg-slate-200"
+                        >
+                          HANA Backup
+                        </button>
+                        <button
+                          className="block w-full border-t-[0.25px] border-slate-300 px-3 py-2 text-left text-xs text-black hover:bg-slate-200"
+                        >
+                          Install
+                        </button>
                         </div>
                       )}
                     </div>
-                    <button className="w-fit whitespace-nowrap border-l-[0.25px] border-slate-200 px-3 py-1.5 text-xs font-medium text-black hover:bg-slate-200 focus:outline-none">Actions</button>
+                    <div className="group relative">
+                      <button className="whitespace-nowrap rounded px-3 py-1.5 text-xs font-medium text-black hover:bg-slate-200 focus:outline-none">
+                        Actions
+                      </button>
+                    </div>
                   </div>
                   {/* Grid content area */}
                   <div className="grid flex-1 min-h-0 grid-rows-[70%_30%]">
-                    <div className="min-h-0 overflow-y-auto px-4 py-4" />
+                    <div className="min-h-0 overflow-y-auto px-4 py-4">
+                      {backupMenuError && (
+                        <div className="mb-3 rounded border-[0.25px] border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                          {backupMenuError}
+                        </div>
+                      )}
+                      {selectedRowKey && actionsByRow[selectedRowKey]?.message && (
+                        <pre
+                          className={`whitespace-pre-wrap break-words rounded border-[0.25px] px-3 py-3 text-xs ${
+                            actionsByRow[selectedRowKey]?.status === "error"
+                              ? "border-red-200 bg-red-50 text-red-700"
+                              : actionsByRow[selectedRowKey]?.status === "success"
+                                ? "border-green-200 bg-green-50 text-green-700"
+                                : "border-slate-200 bg-slate-50 text-slate-700"
+                          }`}
+                        >
+                          {actionsByRow[selectedRowKey]?.message}
+                        </pre>
+                      )}
+                    </div>
                     <div className="border-t-[0.25px] border-slate-200 px-4 py-4">
                       <h2 className="text-sm font-semibold text-black">System Properties</h2>
                     </div>
