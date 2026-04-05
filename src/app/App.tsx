@@ -6,6 +6,18 @@ type ServerRow = {
   ipAddress: string;
 };
 
+type AddServerFormState = {
+  serverIp: string;
+  domainName: string;
+  rootUsername: string;
+  rootUserPassword: string;
+  hanaDbUsername: string;
+  hanaDbPassword: string;
+  hanaPort: string;
+  hanaBackupPath: string;
+  isDeleted: boolean;
+};
+
 type ActionStatus = "idle" | "sending" | "success" | "error";
 
 type ServerActionState = {
@@ -92,50 +104,68 @@ function formatPayload(payload: unknown) {
   }
 }
 
+const initialAddServerForm: AddServerFormState = {
+  serverIp: "",
+  domainName: "",
+  rootUsername: "",
+  rootUserPassword: "",
+  hanaDbUsername: "",
+  hanaDbPassword: "",
+  hanaPort: "",
+  hanaBackupPath: "",
+  isDeleted: false
+};
+
 export default function App() {
   const [servers, setServers] = useState<ServerRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [actionsByRow, setActionsByRow] = useState<Record<string, ServerActionState>>({});
+  const [logsByRow, setLogsByRow] = useState<Record<string, string[]>>({});
   const [selectedRowKey, setSelectedRowKey] = useState<string | null>(null);
   const [selectedServer, setSelectedServer] = useState<ServerRow | null>(null);
   const [backupMenuError, setBackupMenuError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [activePage, setActivePage] = useState<"dashboard" | "settings" | "about">("dashboard");
   const [isSapBasisMenuOpen, setIsSapBasisMenuOpen] = useState(false);
+  const [isAddServerOpen, setIsAddServerOpen] = useState(false);
+  const [addServerForm, setAddServerForm] = useState<AddServerFormState>(initialAddServerForm);
+  const [isAddServerSubmitting, setIsAddServerSubmitting] = useState(false);
+  const [addServerSubmitError, setAddServerSubmitError] = useState("");
 
 
   const filteredServers = servers.filter((server) =>
     server.domainName.toLowerCase().includes(searchQuery.toLowerCase())
   );
+  const selectedLogs = selectedRowKey ? logsByRow[selectedRowKey] ?? [] : [];
+
+  const fetchServers = async () => {
+    setIsLoading(true);
+    setLoadError("");
+
+    try {
+      const response = await fetch("http://localhost:8084/api/v1/servers/summaries", {
+        method: "GET",
+        headers: {
+          "Accept": "application/json"
+        }
+      });
+      const payload = await getResponsePayload(response);
+
+      if (!response.ok) {
+        throw new Error(`Request failed with status ${response.status}`);
+      }
+
+      const normalizedRows = normalizeServerRows(payload);
+      setServers(normalizedRows);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "Failed to load server list.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchServers = async () => {
-      setIsLoading(true);
-      setLoadError("");
-
-      try {
-        const response = await fetch("http://localhost:8084/api/v1/servers/summaries", {
-          method: "GET",
-          headers: {
-            "Accept": "application/json"
-          }
-        });
-        const payload = await getResponsePayload(response);
-
-        if (!response.ok) {
-          throw new Error(`Request failed with status ${response.status}`);
-        }
-
-        const normalizedRows = normalizeServerRows(payload);
-        setServers(normalizedRows);
-      } catch (error) {
-        setLoadError(error instanceof Error ? error.message : "Failed to load server list.");
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
     void fetchServers();
   }, []);
 
@@ -200,20 +230,22 @@ export default function App() {
       return;
     }
 
-    setBackupMenuError("");
-
-    const rowKey = selectedRowKey;
-
     if (selectedServer.serverConfigId === null) {
       setActionsByRow((current) => ({
         ...current,
-        [rowKey]: {
+        [selectedRowKey]: {
           status: "error",
           message: "serverId is missing for this row."
         }
       }));
       return;
     }
+
+    setBackupMenuError("");
+    setIsSapBasisMenuOpen(false);
+
+    const rowKey = selectedRowKey;
+    const server = selectedServer;
 
     setActionsByRow((current) => ({
       ...current,
@@ -223,17 +255,49 @@ export default function App() {
       }
     }));
 
-    try {
-      const response = await fetch(`http://localhost:8082/api/v1/hbs/${encodeURIComponent(String(selectedServer.serverConfigId))}`, {
-        method: "POST",
-        headers: {
-          "Accept": "application/json"
-        }
+    const handleHanaBackup = (url: string) => {
+      const es = new EventSource(url);
+
+      const handleEvent = (event: MessageEvent) => {
+        setLogsByRow((current) => ({
+          ...current,
+          [rowKey]: [...(current[rowKey] ?? []), event.data as string]
+        }));
+      };
+
+      es.onmessage = handleEvent;              // default          // named
+      es.addEventListener("error", handleEvent);  // named
+
+      es.addEventListener("close", () => {
+        console.log("Server asked to close");
+        setLogsByRow((current) => ({
+          ...current,
+          [rowKey]: [...(current[rowKey] ?? []), "Log stream closed by server."]
+        }));
+        es.close();
       });
+    };
+
+    try {
+      
+      handleHanaBackup(`http://localhost:8082/api/v1/hbs/logs/stream/${server.serverConfigId}`);
+
+      const response = await fetch(
+        `http://localhost:8082/api/v1/hbs/${encodeURIComponent(String(server.serverConfigId))}`,
+        {
+          method: "POST",
+          headers: {
+            Accept: "application/json"
+          }
+        }
+      );
 
       const payload = await getResponsePayload(response);
+
       if (!response.ok) {
-        throw new Error(formatPayload(payload) || `Request failed with status ${response.status}`);
+        throw new Error(
+          formatPayload(payload) || `Request failed with status ${response.status}`
+        );
       }
 
       setActionsByRow((current) => ({
@@ -251,8 +315,56 @@ export default function App() {
           message: error instanceof Error ? error.message : "Failed to send request."
         }
       }));
+    }
+  };
+
+  const handleAddServerFieldChange = (field: keyof AddServerFormState, value: string) => {
+    setAddServerForm((current) => ({
+      ...current,
+      [field]: value
+    }));
+  };
+
+  const handleAddServerSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setAddServerSubmitError("");
+
+    const mappedPayload = {
+      serverIP: addServerForm.serverIp,
+      domainName: addServerForm.domainName,
+      rootUserName: addServerForm.rootUsername,
+      password: addServerForm.rootUserPassword,
+      hanaUserName: addServerForm.hanaDbUsername,
+      hanaPassword: addServerForm.hanaDbPassword,
+      hanaPort: addServerForm.hanaPort,
+      hanaBackupPath: addServerForm.hanaBackupPath,
+      isDeleted: addServerForm.isDeleted
+    };
+
+    try {
+      setIsAddServerSubmitting(true);
+      const response = await fetch("http://localhost:8084/api/v1/servers", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json"
+        },
+        body: JSON.stringify(mappedPayload)
+      });
+
+      const payload = await getResponsePayload(response);
+      if (!response.ok) {
+        throw new Error(formatPayload(payload) || `Request failed with status ${response.status}`);
+      }
+
+      setAddServerForm(initialAddServerForm);
+      setIsAddServerOpen(false);
+      await fetchServers();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to submit Add Server form";
+      setAddServerSubmitError(message);
     } finally {
-      setIsSapBasisMenuOpen(false);
+      setIsAddServerSubmitting(false);
     }
   };
 
@@ -326,17 +438,15 @@ export default function App() {
                 {/* Server nodes column */}
                 <div className="h-full border-r-[0.25px] border-slate-200 flex flex-col">
                   {/* Search bar */}
-                  {!isLoading && !loadError && servers.length > 0 && (
-                    <div className="border-b-[0.25px] border-slate-200 px-2 py-2">
-                      <input
-                        type="text"
-                        placeholder="Search domains..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="w-full rounded border-[0.25px] border-slate-200 bg-white px-3 py-1 text-sm text-black placeholder-slate-500 focus:outline-none"
-                      />
-                    </div>
-                  )}
+                  <div className="border-b-[0.25px] border-slate-200 px-2 py-2">
+                    <input
+                      type="text"
+                      placeholder="Search domains..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full rounded border-[0.25px] border-slate-200 bg-white px-3 py-1 text-sm text-black placeholder-slate-500 focus:outline-none"
+                    />
+                  </div>
                   {/* Content area */}
                   <div className="min-h-0 flex-1 overflow-y-auto">
                     {isLoading && <p className="text-sm text-slate-300 px-4 py-4">Loading servers...</p>}
@@ -345,28 +455,49 @@ export default function App() {
                       <p className="rounded-lg border-[0.25px] border-slate-200 bg-red-500/10 px-4 py-3 text-sm text-red-300 m-4">{loadError}</p>
                     )}
 
-                    {!isLoading && !loadError && servers.length === 0 && (
-                      <p className="text-sm text-slate-300 px-4 py-4">No servers were returned by the API.</p>
-                    )}
-
-                    {!isLoading && !loadError && servers.length > 0 && (
+                    {!isLoading && !loadError && (
                       <div>
-                        {filteredServers.length === 0 ? (
-                          <p className="text-sm text-slate-500 px-4 py-4">No matching domains found.</p>
-                        ) : (
-                          <table className="w-full table-fixed border-collapse text-left text-sm">
-                            <colgroup>
-                              <col className="w-[55%]" />
-                              <col className="w-[45%]" />
-                            </colgroup>
-                            <thead>
-                              <tr className="border-b-[0.25px] border-slate-200 bg-[#f1f5f9] text-slate-700">
-                                <th className="px-2 py-2 font-medium">Domain</th>
-                                <th className="px-2 py-2 font-medium">Status</th>
+                        <table className="w-full table-fixed border-collapse text-left text-sm">
+                          <colgroup>
+                            <col className="w-[55%]" />
+                            <col className="w-[45%]" />
+                          </colgroup>
+                          <thead>
+                            <tr className="border-b-[0.25px] border-slate-200 bg-[#f1f5f9] text-slate-700">
+                              <th className="px-2 py-2 font-medium">Domain</th>
+                              <th className="px-2 py-2 font-medium">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span>Status</span>
+                                  <button
+                                    type="button"
+                                    className="text-3xl font-bold leading-none text-slate-900"
+                                    title="Add Server"
+                                    onClick={() => setIsAddServerOpen(true)}
+                                  >
+                                    +
+                                  </button>
+                                </div>
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {servers.length === 0 && (
+                              <tr>
+                                <td colSpan={2} className="px-2 py-4 text-sm text-slate-500">
+                                  No servers were returned by the API.
+                                </td>
                               </tr>
-                            </thead>
-                            <tbody>
-                              {filteredServers.map((server, index) => {
+                            )}
+
+                            {servers.length > 0 && filteredServers.length === 0 && (
+                              <tr>
+                                <td colSpan={2} className="px-2 py-4 text-sm text-slate-500">
+                                  No matching domains found.
+                                </td>
+                              </tr>
+                            )}
+
+                            {filteredServers.length > 0 && filteredServers.map((server, index) => {
                                 const rowKey = String(server.serverConfigId ?? `${server.domainName}-${index}`);
                                 const action =
                                   actionsByRow[rowKey] ??
@@ -375,6 +506,10 @@ export default function App() {
                                     message: ""
                                   } satisfies ServerActionState);
                                 const isSending = action.status === "sending";
+                                const agentCompleted = (logsByRow[rowKey] ?? []).some((log) =>
+                                  log.includes("Agent completed")
+                                );
+                                const isGreen = isSending || ((logsByRow[rowKey]?.length ?? 0) > 0 && !agentCompleted);
 
                                 return (
                                   <tr
@@ -386,7 +521,7 @@ export default function App() {
                                     }}
                                     onDoubleClick={() => handleServerAction(server, rowKey)}
                                     className={`cursor-pointer border-b-[0.25px] border-slate-200 ${
-                                      isSending
+                                      isGreen
                                         ? "bg-green-500/10 text-black"
                                         : selectedRowKey === rowKey
                                           ? "bg-slate-200 text-black"
@@ -409,9 +544,8 @@ export default function App() {
                                   </tr>
                                 );
                               })}
-                            </tbody>
-                          </table>
-                        )}
+                          </tbody>
+                        </table>
                       </div>
                     )}
                   </div>
@@ -479,8 +613,16 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Empty fourth column */}
-                <div />
+                {/* Log stream column */}
+                <div className="h-full overflow-y-auto border-l-[0.25px] border-slate-200 p-2 font-mono text-xs text-slate-700">
+                  {selectedLogs.length === 0 ? (
+                    <span className="text-slate-400">No logs yet.</span>
+                  ) : (
+                    selectedLogs.map((line, i) => (
+                      <div key={i} className="whitespace-pre-wrap break-words border-b-[0.25px] border-slate-100 py-0.5">{line}</div>
+                    ))
+                  )}
+                </div>
               </div>
             )}
 
@@ -544,6 +686,140 @@ export default function App() {
           </div>
         </div>
       </main>
+
+      {isAddServerOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
+          <div className="w-full max-w-2xl rounded-xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+              <h2 className="text-lg font-semibold text-slate-900">Add Server</h2>
+              <button
+                type="button"
+                onClick={() => setIsAddServerOpen(false)}
+                className="rounded px-2 py-1 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+              >
+                Close
+              </button>
+            </div>
+
+            <form onSubmit={handleAddServerSubmit} className="px-6 py-5">
+              <input type="hidden" name="isDeleted" value={String(addServerForm.isDeleted)} />
+              {addServerSubmitError && (
+                <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                  {addServerSubmitError}
+                </div>
+              )}
+
+              <div className="grid gap-4 sm:grid-cols-2">
+                <label className="flex flex-col gap-1 text-sm text-slate-700">
+                  <span>Server IP</span>
+                  <input
+                    type="text"
+                    value={addServerForm.serverIp}
+                    onChange={(event) => handleAddServerFieldChange("serverIp", event.target.value)}
+                    required
+                    className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-[#e8471b]"
+                  />
+                </label>
+
+                <label className="flex flex-col gap-1 text-sm text-slate-700">
+                  <span>Domain name</span>
+                  <input
+                    type="text"
+                    value={addServerForm.domainName}
+                    onChange={(event) => handleAddServerFieldChange("domainName", event.target.value)}
+                    required
+                    className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-[#e8471b]"
+                  />
+                </label>
+
+                <label className="flex flex-col gap-1 text-sm text-slate-700">
+                  <span>Root Username</span>
+                  <input
+                    type="text"
+                    value={addServerForm.rootUsername}
+                    onChange={(event) => handleAddServerFieldChange("rootUsername", event.target.value)}
+                    required
+                    className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-[#e8471b]"
+                  />
+                </label>
+
+                <label className="flex flex-col gap-1 text-sm text-slate-700">
+                  <span>Root User Password</span>
+                  <input
+                    type="password"
+                    value={addServerForm.rootUserPassword}
+                    onChange={(event) => handleAddServerFieldChange("rootUserPassword", event.target.value)}
+                    required
+                    className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-[#e8471b]"
+                  />
+                </label>
+
+                <label className="flex flex-col gap-1 text-sm text-slate-700">
+                  <span>HANA DB Username</span>
+                  <input
+                    type="text"
+                    value={addServerForm.hanaDbUsername}
+                    onChange={(event) => handleAddServerFieldChange("hanaDbUsername", event.target.value)}
+                    required
+                    className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-[#e8471b]"
+                  />
+                </label>
+
+                <label className="flex flex-col gap-1 text-sm text-slate-700">
+                  <span>HANA DB Password</span>
+                  <input
+                    type="password"
+                    value={addServerForm.hanaDbPassword}
+                    onChange={(event) => handleAddServerFieldChange("hanaDbPassword", event.target.value)}
+                    required
+                    className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-[#e8471b]"
+                  />
+                </label>
+
+                <label className="flex flex-col gap-1 text-sm text-slate-700">
+                  <span>HANA Port</span>
+                  <input
+                    type="text"
+                    value={addServerForm.hanaPort}
+                    onChange={(event) => handleAddServerFieldChange("hanaPort", event.target.value)}
+                    required
+                    className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-[#e8471b]"
+                  />
+                </label>
+
+                <label className="flex flex-col gap-1 text-sm text-slate-700 sm:col-span-2">
+                  <span>HANA Backup Path</span>
+                  <input
+                    type="text"
+                    value={addServerForm.hanaBackupPath}
+                    onChange={(event) => handleAddServerFieldChange("hanaBackupPath", event.target.value)}
+                    required
+                    className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-[#e8471b]"
+                  />
+                </label>
+              </div>
+
+              <div className="mt-6 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsAddServerOpen(false)}
+                  disabled={isAddServerSubmitting}
+                  className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isAddServerSubmitting}
+                  className="rounded-md bg-[#e8471b] px-4 py-2 text-sm font-semibold text-white hover:bg-[#c73a14] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isAddServerSubmitting ? "Submitting..." : "Submit"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
