@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 
 type ServerRow = {
   serverConfigId: string | number | null;
@@ -24,6 +24,56 @@ type ServerActionState = {
   status: ActionStatus;
   message: string;
 };
+
+type PersistedUiState = {
+  logsByRow: Record<string, string[]>;
+  actionsByRow: Record<string, ServerActionState>;
+  selectedRowKey: string | null;
+  selectedServer: ServerRow | null;
+  searchQuery: string;
+  activePage: "dashboard" | "settings" | "about";
+};
+
+const UI_STATE_STORAGE_KEY = "altzen-cockpit-ui-state-v1";
+
+function handleSSELogging(
+  url: string,
+  rowKey: string,
+  setLogsByRow: Dispatch<SetStateAction<Record<string, string[]>>>
+): EventSource {
+  const es = new EventSource(url);
+
+  const appendLog = (message: string) => {
+    setLogsByRow((current) => ({
+      ...current,
+      [rowKey]: [...(current[rowKey] ?? []), message]
+    }));
+  };
+
+  const handleEvent = (event: MessageEvent) => {
+    if (typeof event.data === "string" && event.data.length > 0) {
+      appendLog(event.data);
+      return;
+    }
+
+    appendLog("Received a non-text log event.");
+  };
+
+  es.onmessage = handleEvent;
+
+  es.onerror = () => {
+    appendLog("Log stream disconnected.");
+    es.close();
+  };
+
+  es.addEventListener("close", () => {
+    console.log("Server asked to close");
+    appendLog("Log stream closed by server.");
+    es.close();
+  });
+
+  return es;
+}
 
 function getText(value: unknown, fallback = "N/A") {
   if (typeof value === "string") {
@@ -132,6 +182,77 @@ export default function App() {
   const [addServerForm, setAddServerForm] = useState<AddServerFormState>(initialAddServerForm);
   const [isAddServerSubmitting, setIsAddServerSubmitting] = useState(false);
   const [addServerSubmitError, setAddServerSubmitError] = useState("");
+  const sseByRowRef = useRef<Record<string, EventSource>>({});
+
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem(UI_STATE_STORAGE_KEY);
+      if (!saved) {
+        return;
+      }
+
+      const parsed = JSON.parse(saved) as Partial<PersistedUiState>;
+      if (parsed.logsByRow) {
+        setLogsByRow(parsed.logsByRow);
+      }
+      if (parsed.actionsByRow) {
+        setActionsByRow(parsed.actionsByRow);
+      }
+      if (typeof parsed.selectedRowKey === "string" || parsed.selectedRowKey === null) {
+        setSelectedRowKey(parsed.selectedRowKey);
+      }
+      if (parsed.selectedServer && typeof parsed.selectedServer === "object") {
+        setSelectedServer(parsed.selectedServer as ServerRow);
+      }
+      if (typeof parsed.searchQuery === "string") {
+        setSearchQuery(parsed.searchQuery);
+      }
+      if (parsed.activePage === "dashboard" || parsed.activePage === "settings" || parsed.activePage === "about") {
+        setActivePage(parsed.activePage);
+      }
+    } catch {
+      // Ignore malformed persisted state.
+    }
+  }, []);
+
+  useEffect(() => {
+    const payload: PersistedUiState = {
+      logsByRow,
+      actionsByRow,
+      selectedRowKey,
+      selectedServer,
+      searchQuery,
+      activePage
+    };
+
+    sessionStorage.setItem(UI_STATE_STORAGE_KEY, JSON.stringify(payload));
+  }, [logsByRow, actionsByRow, selectedRowKey, selectedServer, searchQuery, activePage]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(sseByRowRef.current).forEach((es) => {
+        es.close();
+      });
+      sseByRowRef.current = {};
+    };
+  }, []);
+
+  const startSSELogging = (url: string, rowKey: string) => {
+    const existing = sseByRowRef.current[rowKey];
+    if (existing) {
+      existing.close();
+    }
+
+    sseByRowRef.current[rowKey] = handleSSELogging(url, rowKey, setLogsByRow);
+  };
+
+  const stopSSELogging = (rowKey: string) => {
+    const existing = sseByRowRef.current[rowKey];
+    if (existing) {
+      existing.close();
+      delete sseByRowRef.current[rowKey];
+    }
+  };
 
 
   const filteredServers = servers.filter((server) =>
@@ -255,32 +376,11 @@ export default function App() {
       }
     }));
 
-    const handleHanaBackup = (url: string) => {
-      const es = new EventSource(url);
-
-      const handleEvent = (event: MessageEvent) => {
-        setLogsByRow((current) => ({
-          ...current,
-          [rowKey]: [...(current[rowKey] ?? []), event.data as string]
-        }));
-      };
-
-      es.onmessage = handleEvent;              // default          // named
-      es.addEventListener("error", handleEvent);  // named
-
-      es.addEventListener("close", () => {
-        console.log("Server asked to close");
-        setLogsByRow((current) => ({
-          ...current,
-          [rowKey]: [...(current[rowKey] ?? []), "Log stream closed by server."]
-        }));
-        es.close();
-      });
-    };
+    
 
     try {
       
-      handleHanaBackup(`http://localhost:8082/api/v1/hbs/logs/stream/${server.serverConfigId}`);
+      startSSELogging(`http://localhost:8082/api/v1/hbs/logs/stream/${server.serverConfigId}`, rowKey);
 
       const response = await fetch(
         `http://localhost:8082/api/v1/hbs/${encodeURIComponent(String(server.serverConfigId))}`,
@@ -308,6 +408,75 @@ export default function App() {
         }
       }));
     } catch (error) {
+      stopSSELogging(rowKey);
+      setActionsByRow((current) => ({
+        ...current,
+        [rowKey]: {
+          status: "error",
+          message: error instanceof Error ? error.message : "Failed to send request."
+        }
+      }));
+    }
+  };
+
+  const handleInstall = async () => {
+    if (!selectedRowKey || !selectedServer) {
+      setBackupMenuError("OOPS You have not selected any server yet");
+      return;
+    }
+
+    if (selectedServer.serverConfigId === null) {
+      setActionsByRow((current) => ({
+        ...current,
+        [selectedRowKey]: {
+          status: "error",
+          message: "serverId is missing for this row."
+        }
+      }));
+      return;
+    }
+
+    setBackupMenuError("");
+    setIsSapBasisMenuOpen(false);
+
+    const rowKey = selectedRowKey;
+    const server = selectedServer;
+
+    setActionsByRow((current) => ({
+      ...current,
+      [rowKey]: {
+        status: "sending",
+        message: "Submitting Install request..."
+      }
+    }));
+
+    try {
+
+      startSSELogging(`http://localhost:8083/api/v1/his/logs/stream/${server.serverConfigId}`, rowKey);
+      const response = await fetch(
+        `http://localhost:8083/api/v1/his/${encodeURIComponent(String(server.serverConfigId))}`,
+        {
+          method: "POST",
+          headers: {
+            Accept: "application/json"
+          }
+        }
+      );
+
+      const payload = await getResponsePayload(response);
+      if (!response.ok) {
+        throw new Error(formatPayload(payload) || `Request failed with status ${response.status}`);
+      }
+
+      setActionsByRow((current) => ({
+        ...current,
+        [rowKey]: {
+          status: "success",
+          message: formatPayload(payload)
+        }
+      }));
+    } catch (error) {
+      stopSSELogging(rowKey);
       setActionsByRow((current) => ({
         ...current,
         [rowKey]: {
@@ -507,7 +676,7 @@ export default function App() {
                                   } satisfies ServerActionState);
                                 const isSending = action.status === "sending";
                                 const agentCompleted = (logsByRow[rowKey] ?? []).some((log) =>
-                                  log.includes("Agent completed")
+                                  typeof log === "string" && log.includes("Agent completed")
                                 );
                                 const isGreen = isSending || ((logsByRow[rowKey]?.length ?? 0) > 0 && !agentCompleted);
 
@@ -572,6 +741,7 @@ export default function App() {
                           HANA Backup
                         </button>
                         <button
+                          onClick={handleInstall}
                           className="block w-full border-t-[0.25px] border-slate-300 px-3 py-2 text-left text-xs text-black hover:bg-slate-200"
                         >
                           Install
