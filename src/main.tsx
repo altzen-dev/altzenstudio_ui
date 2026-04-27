@@ -15,7 +15,7 @@ declare global {
 const keycloak = new Keycloak({
   url: KEYCLOAK_URL,
   realm: "cockpit",
-  clientId: "api-gateway"
+  clientId: "cockpit-ui"
 });
 
 function installAuthenticatedFetch(authClient: Keycloak) {
