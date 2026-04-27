@@ -1,4 +1,5 @@
 import { createAsyncThunk, createSlice } from "@reduxjs/toolkit";
+import { KEYCLOAK_URL } from "../../config";
 
 export interface Table {
   seatingCapacity: number;
@@ -55,7 +56,7 @@ const initialState: HomeState = {
 export const fetchHomeData = createAsyncThunk<HomeResponse>(
   "home/fetchHomeData",
   async () => {
-    const response = await fetch("http://localhost:8080/api/v1/order-management/home/org/1");
+    const response = await fetch(`${KEYCLOAK_URL}/api/v1/order-management/home/org/1`);
 
     if (!response.ok) {
       throw new Error(`Request failed: ${response.status}`);

@@ -1,4 +1,12 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { fetchEventSource } from "@microsoft/fetch-event-source";
+import { API_BASE_URL } from "./config";
+
+declare global {
+  interface Window {
+    getAccessToken?: () => Promise<string | null>;
+  }
+}
 
 type ServerRow = {
   serverConfigId: string | number | null;
@@ -40,8 +48,8 @@ function handleSSELogging(
   url: string,
   rowKey: string,
   setLogsByRow: Dispatch<SetStateAction<Record<string, string[]>>>
-): EventSource {
-  const es = new EventSource(url);
+): AbortController {
+  const controller = new AbortController();
 
   const appendLog = (message: string) => {
     setLogsByRow((current) => ({
@@ -50,29 +58,46 @@ function handleSSELogging(
     }));
   };
 
-  const handleEvent = (event: MessageEvent) => {
-    if (typeof event.data === "string" && event.data.length > 0) {
-      appendLog(event.data);
+  void (async () => {
+    const token = (await window.getAccessToken?.()) ?? null;
+
+    await fetchEventSource(url, {
+      method: "GET",
+      signal: controller.signal,
+      openWhenHidden: true,
+      headers: token
+        ? {
+            Authorization: `Bearer ${token}`
+          }
+        : undefined,
+      onmessage: (event) => {
+        if (event.event === "close") {
+          appendLog("Log stream closed by server.");
+          controller.abort();
+          return;
+        }
+
+        if (typeof event.data === "string" && event.data.length > 0) {
+          appendLog(event.data);
+          return;
+        }
+
+        appendLog("Received a non-text log event.");
+      },
+      onerror: (error) => {
+        throw error;
+      }
+    });
+  })().catch((error) => {
+    if (controller.signal.aborted) {
       return;
     }
 
-    appendLog("Received a non-text log event.");
-  };
-
-  es.onmessage = handleEvent;
-
-  es.onerror = () => {
+    console.error("SSE connection failed.", error);
     appendLog("Log stream disconnected.");
-    es.close();
-  };
-
-  es.addEventListener("close", () => {
-    console.log("Server asked to close");
-    appendLog("Log stream closed by server.");
-    es.close();
   });
 
-  return es;
+  return controller;
 }
 
 function getText(value: unknown, fallback = "N/A") {
@@ -182,7 +207,7 @@ export default function App() {
   const [addServerForm, setAddServerForm] = useState<AddServerFormState>(initialAddServerForm);
   const [isAddServerSubmitting, setIsAddServerSubmitting] = useState(false);
   const [addServerSubmitError, setAddServerSubmitError] = useState("");
-  const sseByRowRef = useRef<Record<string, EventSource>>({});
+  const sseByRowRef = useRef<Record<string, AbortController>>({});
 
   useEffect(() => {
     try {
@@ -230,8 +255,8 @@ export default function App() {
 
   useEffect(() => {
     return () => {
-      Object.values(sseByRowRef.current).forEach((es) => {
-        es.close();
+      Object.values(sseByRowRef.current).forEach((controller) => {
+        controller.abort();
       });
       sseByRowRef.current = {};
     };
@@ -240,7 +265,7 @@ export default function App() {
   const startSSELogging = (url: string, rowKey: string) => {
     const existing = sseByRowRef.current[rowKey];
     if (existing) {
-      existing.close();
+      existing.abort();
     }
 
     sseByRowRef.current[rowKey] = handleSSELogging(url, rowKey, setLogsByRow);
@@ -249,7 +274,7 @@ export default function App() {
   const stopSSELogging = (rowKey: string) => {
     const existing = sseByRowRef.current[rowKey];
     if (existing) {
-      existing.close();
+      existing.abort();
       delete sseByRowRef.current[rowKey];
     }
   };
@@ -265,7 +290,7 @@ export default function App() {
     setLoadError("");
 
     try {
-      const response = await fetch("http://localhost:8084/api/v1/servers/summaries", {
+      const response = await fetch(`${API_BASE_URL}/api/v1/servers/summaries`, {
         method: "GET",
         headers: {
           "Accept": "application/json"
@@ -312,7 +337,7 @@ export default function App() {
     }));
 
     try {
-      const response = await fetch("http://localhost:8082/api/v1/hbs", {
+      const response = await fetch(`${API_BASE_URL}/api/v1/hbs`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -380,10 +405,11 @@ export default function App() {
 
     try {
       
-      startSSELogging(`http://localhost:8082/api/v1/hbs/logs/stream/${server.serverConfigId}`, rowKey);
+      startSSELogging(`${API_BASE_URL}/api/v1/hbs/logs/stream/${server.serverConfigId}`, rowKey);
 
       const response = await fetch(
-        `http://localhost:8082/api/v1/hbs/${encodeURIComponent(String(server.serverConfigId))}`,
+        `${API_BASE_URL}/api/v1/hbs/${encodeURIComponent(String(server.serverConfigId))}`,
+
         {
           method: "POST",
           headers: {
@@ -452,9 +478,10 @@ export default function App() {
 
     try {
 
-      startSSELogging(`http://localhost:8083/api/v1/his/logs/stream/${server.serverConfigId}`, rowKey);
+      startSSELogging(`${API_BASE_URL}/api/v1/his/logs/stream/${server.serverConfigId}`, rowKey);
       const response = await fetch(
-        `http://localhost:8083/api/v1/his/${encodeURIComponent(String(server.serverConfigId))}`,
+        `${API_BASE_URL}/api/v1/his/${encodeURIComponent(String(server.serverConfigId))}`,
+
         {
           method: "POST",
           headers: {
@@ -512,7 +539,7 @@ export default function App() {
 
     try {
       setIsAddServerSubmitting(true);
-      const response = await fetch("http://localhost:8084/api/v1/servers", {
+      const response = await fetch(`${API_BASE_URL}/api/v1/servers`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -541,9 +568,11 @@ export default function App() {
     <div className="flex h-screen flex-col overflow-hidden bg-white text-slate-900">
       <header className="sticky top-0 z-10 border-b-[0.25px] border-slate-200 bg-white/95 backdrop-blur">
         <div className="flex w-full items-center gap-4 py-4">
-          <h1 className="text-left text-2xl font-semibold tracking-wide sm:text-3xl">
-            <span className="text-[#e8471b]">Altzen</span> <span className="text-slate-900">Cockpit</span>
-          </h1>
+          <img
+            src="/icons/altzenLogo.webp"
+            alt="Company logo"
+            className="h-10 w-auto object-contain sm:h-11 ml-3"
+          />
         </div>
       </header>
 
