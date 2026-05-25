@@ -18,7 +18,36 @@ const keycloak = new Keycloak({
   clientId: "cockpit-ui"
 });
 
+function ensureWebCryptoCompatibility() {
+  if (typeof window.crypto === "undefined") {
+    throw new Error(
+      "Web Crypto API is not available. Serve this app over HTTPS (or localhost) and use a modern browser."
+    );
+  }
+
+  if (typeof window.crypto.randomUUID !== "function" && typeof window.crypto.getRandomValues === "function") {
+    const randomUUID = () => {
+      const bytes = window.crypto.getRandomValues(new Uint8Array(16));
+      bytes[6] = (bytes[6] & 0x0f) | 0x40;
+      bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+      const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0"));
+      return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex
+        .slice(6, 8)
+        .join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10, 16).join("")}`;
+    };
+
+    Object.defineProperty(window.crypto, "randomUUID", {
+      value: randomUUID,
+      configurable: true,
+      writable: true
+    });
+  }
+}
+
+
 function installAuthenticatedFetch(authClient: Keycloak) {
+  
   const originalFetch = window.fetch.bind(window);
 
   window.getAccessToken = async () => {
@@ -66,9 +95,14 @@ if (!rootElement) {
   throw new Error("Root element not found.");
 }
 
+ensureWebCryptoCompatibility();
+
 keycloak
   .init({
-    onLoad: "login-required"
+    onLoad: "login-required",
+    checkLoginIframe: false,
+    pkceMethod: false,
+    redirectUri: window.location.origin
   })
   .then((authenticated) => {
     if (!authenticated) {

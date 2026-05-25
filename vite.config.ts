@@ -73,7 +73,9 @@ export default defineConfig({
     outDir: 'build',
   },
   server: {
+    host: '0.0.0.0',
     port: 3000,
+    strictPort: true,
     open: true,
     proxy: {
       '/api': {
@@ -82,6 +84,11 @@ export default defineConfig({
         secure: false,
       },
     },
+  },
+  preview: {
+    host: '0.0.0.0',
+    port: 4173,
+    strictPort: true,
   },
 
 });
