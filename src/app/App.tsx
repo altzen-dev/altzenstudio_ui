@@ -44,6 +44,39 @@ type PersistedUiState = {
 
 const UI_STATE_STORAGE_KEY = "altzen-cockpit-ui-state-v1";
 
+type RegionOption = {
+  id: string | number;
+  regionName: string;
+};
+
+type SkillOption = {
+  id: string | number;
+  skillName: string;
+};
+
+type PeopleRow = {
+  personId: string | number | null;
+  apolloId: string | number | null;
+  firstName: string;
+  lastName: string;
+  title: string;
+  titleId: number | null;
+  skillName: string;
+  country: string;
+  mobile: string;
+  linkedin: string;
+  organization: string;
+  isWhatsApp: boolean;
+  isLinkedin: boolean;
+  linkedinMsgCount: number | null;
+  whatsappMsgCount: number | null;
+};
+
+type PushMessageOption = {
+  pushMsgId: string | number;
+  pushMsgName: string;
+};
+
 function handleSSELogging(
   url: string,
   rowKey: string,
@@ -179,6 +212,226 @@ function formatPayload(payload: unknown) {
   }
 }
 
+function normalizePeoplePageInitData(payload: unknown): {
+  regions: RegionOption[];
+  skills: SkillOption[];
+} {
+  const parsed = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+  const data =
+    parsed.data && typeof parsed.data === "object" ? (parsed.data as Record<string, unknown>) : parsed;
+
+  const regionsSource =
+    Array.isArray(data.regions)
+      ? data.regions
+      : Array.isArray(data.regionList)
+        ? data.regionList
+        : Array.isArray(data.region)
+          ? data.region
+          : [];
+
+  const skillsSource =
+    Array.isArray(data.skills)
+      ? data.skills
+      : Array.isArray(data.skillset)
+        ? data.skillset
+        : Array.isArray(data.skillSet)
+          ? data.skillSet
+          : [];
+
+  const regions = regionsSource.reduce<RegionOption[]>((accumulator, entry) => {
+    if (!entry || typeof entry !== "object") {
+      return accumulator;
+    }
+
+    const row = entry as Record<string, unknown>;
+    const idCandidate = row.regionId ?? row.id ?? null;
+    if (typeof idCandidate !== "string" && typeof idCandidate !== "number") {
+      return accumulator;
+    }
+
+    accumulator.push({
+      id: idCandidate,
+      regionName: getText(row.regionName ?? row.name, "Unknown Region")
+    });
+
+    return accumulator;
+  }, []);
+
+  const skills = skillsSource.reduce<SkillOption[]>((accumulator, entry) => {
+    if (!entry || typeof entry !== "object") {
+      return accumulator;
+    }
+
+    const row = entry as Record<string, unknown>;
+    const idCandidate = row.id ?? row.skillId ?? row.skillID ?? row.skill_id ?? null;
+    if (typeof idCandidate !== "string" && typeof idCandidate !== "number") {
+      return accumulator;
+    }
+
+    accumulator.push({
+      id: idCandidate,
+      skillName: getText(row.skillname ?? row.skillName ?? row.name, "Unknown Skill")
+    });
+
+    return accumulator;
+  }, []);
+
+  return { regions, skills };
+}
+
+function normalizePeopleList(payload: unknown): PeopleRow[] {
+  let source: unknown[] = [];
+
+  if (Array.isArray(payload)) {
+    source = payload;
+  } else if (payload && typeof payload === "object") {
+    const p = payload as Record<string, unknown>;
+    if (Array.isArray(p.data)) source = p.data;
+    else if (Array.isArray(p.people)) source = p.people;
+    else if (Array.isArray(p.items)) source = p.items;
+  }
+
+  return source.reduce<PeopleRow[]>((acc, entry) => {
+    if (!entry || typeof entry !== "object") return acc;
+    const row = entry as Record<string, unknown>;
+    const organizationObject =
+      row.organization && typeof row.organization === "object"
+        ? (row.organization as Record<string, unknown>)
+        : null;
+    const personIdCandidate = row.personId ?? row.person_id ?? row.id ?? row.apolloId ?? row.apollo_id ?? null;
+    const idCandidate = row.apolloId ?? row.apollo_id ?? row.id ?? null;
+    const titleIdCandidate = row.titleId ?? row.title_id ?? row.titleID ?? null;
+    acc.push({
+      personId:
+        typeof personIdCandidate === "string" || typeof personIdCandidate === "number"
+          ? personIdCandidate
+          : null,
+      apolloId: typeof idCandidate === "string" || typeof idCandidate === "number" ? idCandidate : null,
+      firstName: getText(row.firstName ?? row.first_name ?? row.firstname, ""),
+      lastName: getText(row.lastName ?? row.last_name ?? row.lastname, ""),
+      title: getText(row.title ?? row.jobTitle ?? row.job_title, ""),
+      titleId: typeof titleIdCandidate === "number" ? titleIdCandidate : (typeof titleIdCandidate === "string" && !isNaN(Number(titleIdCandidate)) ? Number(titleIdCandidate) : null),
+      skillName: getText(row.skillName ?? row.skill_name, ""),
+      country: getText(row.country ?? row.countryName ?? row.country_name ?? "", ""),
+      mobile: getText(row.mobile ?? row.phone ?? row.mobilePhone, ""),
+      linkedin: getText(row.linkedin ?? row.linkedinUrl ?? row.linkedin_url, ""),
+      isWhatsApp:
+        typeof row.isWhatsApp === "boolean"
+          ? row.isWhatsApp
+          : typeof row.isWhatsapp === "boolean"
+            ? row.isWhatsapp
+            : false,
+      isLinkedin:
+        typeof row.isLinkedin === "boolean"
+          ? row.isLinkedin
+          : typeof row.isLinkedIn === "boolean"
+            ? row.isLinkedIn
+            : false,
+      linkedinMsgCount:
+        typeof row.linkedinMsgCount === "number"
+          ? row.linkedinMsgCount
+          : typeof row.linkedinMsgCount === "string" && !isNaN(Number(row.linkedinMsgCount))
+            ? Number(row.linkedinMsgCount)
+            : null,
+      whatsappMsgCount:
+        typeof row.whatsappMsgCount === "number"
+          ? row.whatsappMsgCount
+          : typeof row.whatsappMsgCount === "string" && !isNaN(Number(row.whatsappMsgCount))
+            ? Number(row.whatsappMsgCount)
+            : null,
+      organization: getText(
+        organizationObject?.name ?? row.organizationName ?? row.company ?? row.organization,
+        ""
+      )
+    });
+    return acc;
+  }, []);
+}
+
+function normalizePeopleSearchResponse(payload: unknown): {
+  persons: PeopleRow[];
+  totalPages: number;
+  currentPage: number;
+  pageSize: number;
+} {
+  const parsed = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+  const data =
+    parsed.data && typeof parsed.data === "object" ? (parsed.data as Record<string, unknown>) : parsed;
+
+  const persons = Array.isArray(data.persons)
+    ? normalizePeopleList(data.persons)
+    : Array.isArray(parsed.persons)
+      ? normalizePeopleList(parsed.persons)
+      : normalizePeopleList(payload);
+
+  const totalPagesCandidate = data.totalPages ?? parsed.totalPages;
+  const currentPageCandidate = data.currentPage ?? parsed.currentPage;
+  const pageSizeCandidate = data.pageSize ?? parsed.pageSize;
+
+  const totalPagesNumber =
+    typeof totalPagesCandidate === "number"
+      ? totalPagesCandidate
+      : typeof totalPagesCandidate === "string"
+        ? Number(totalPagesCandidate)
+        : NaN;
+  const currentPageNumber =
+    typeof currentPageCandidate === "number"
+      ? currentPageCandidate
+      : typeof currentPageCandidate === "string"
+        ? Number(currentPageCandidate)
+        : NaN;
+  const pageSizeNumber =
+    typeof pageSizeCandidate === "number"
+      ? pageSizeCandidate
+      : typeof pageSizeCandidate === "string"
+        ? Number(pageSizeCandidate)
+        : NaN;
+
+  return {
+    persons,
+    totalPages: Number.isFinite(totalPagesNumber) && totalPagesNumber > 0 ? Math.trunc(totalPagesNumber) : 1,
+    currentPage:
+      Number.isFinite(currentPageNumber) && currentPageNumber > 0 ? Math.trunc(currentPageNumber) : 1,
+    pageSize: Number.isFinite(pageSizeNumber) && pageSizeNumber > 0 ? Math.trunc(pageSizeNumber) : 25
+  };
+}
+
+function normalizePushMessageOptions(payload: unknown): PushMessageOption[] {
+  let source: unknown[] = [];
+
+  if (Array.isArray(payload)) {
+    source = payload;
+  } else if (payload && typeof payload === "object") {
+    const parsed = payload as Record<string, unknown>;
+    if (Array.isArray(parsed.data)) {
+      source = parsed.data;
+    } else if (Array.isArray(parsed.items)) {
+      source = parsed.items;
+    } else if (Array.isArray(parsed.pushMessages)) {
+      source = parsed.pushMessages;
+    }
+  }
+
+  return source.reduce<PushMessageOption[]>((accumulator, entry) => {
+    if (!entry || typeof entry !== "object") {
+      return accumulator;
+    }
+
+    const row = entry as Record<string, unknown>;
+    const idCandidate = row.pushMsgId ?? row.pushmsgid ?? row.id ?? null;
+    if (typeof idCandidate !== "string" && typeof idCandidate !== "number") {
+      return accumulator;
+    }
+
+    accumulator.push({
+      pushMsgId: idCandidate,
+      pushMsgName: getText(row.pushMsgName ?? row.pushmsgname ?? row.name, "Unnamed Message")
+    });
+
+    return accumulator;
+  }, []);
+}
+
 const initialAddServerForm: AddServerFormState = {
   serverIp: "",
   domainName: "",
@@ -202,11 +455,44 @@ export default function App() {
   const [backupMenuError, setBackupMenuError] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [activePage, setActivePage] = useState<"dashboard" | "settings" | "about">("dashboard");
+  const [showSettingsPeoplePage, setShowSettingsPeoplePage] = useState(false);
+  const [selectedRegion, setSelectedRegion] = useState("");
+  const [selectedSkillset, setSelectedSkillset] = useState("");
+  const [peopleRegions, setPeopleRegions] = useState<RegionOption[]>([]);
+  const [peopleSkills, setPeopleSkills] = useState<SkillOption[]>([]);
+  const [isPeopleInitLoading, setIsPeopleInitLoading] = useState(false);
+  const [peopleInitError, setPeopleInitError] = useState("");
+  const [isPeopleFetchSubmitting, setIsPeopleFetchSubmitting] = useState(false);
+  const [peopleFetchStatus, setPeopleFetchStatus] = useState("");
+  const [peopleFetchStatusType, setPeopleFetchStatusType] = useState<ActionStatus>("idle");
   const [isSapBasisMenuOpen, setIsSapBasisMenuOpen] = useState(false);
   const [isAddServerOpen, setIsAddServerOpen] = useState(false);
   const [addServerForm, setAddServerForm] = useState<AddServerFormState>(initialAddServerForm);
   const [isAddServerSubmitting, setIsAddServerSubmitting] = useState(false);
   const [addServerSubmitError, setAddServerSubmitError] = useState("");
+  const [peopleList, setPeopleList] = useState<PeopleRow[]>([]);
+  const [isPeopleListLoading, setIsPeopleListLoading] = useState(false);
+  const [peopleListError, setPeopleListError] = useState("");
+  const [hasLoadedPeopleList, setHasLoadedPeopleList] = useState(false);
+  const [currentPeoplePage, setCurrentPeoplePage] = useState(1);
+  const [totalPeoplePages, setTotalPeoplePages] = useState(1);
+  const [peopleRowsPerPage, setPeopleRowsPerPage] = useState(25);
+  const [whatsappMsgCountFilter, setWhatsappMsgCountFilter] = useState("");
+  const [linkedinMsgCountFilter, setLinkedinMsgCountFilter] = useState("");
+  const [appliedWhatsappMsgCountFilter, setAppliedWhatsappMsgCountFilter] = useState<number | null>(null);
+  const [appliedLinkedinMsgCountFilter, setAppliedLinkedinMsgCountFilter] = useState<number | null>(null);
+  const [selectedPeopleIds, setSelectedPeopleIds] = useState<Set<number>>(new Set());
+  const [isPeopleEnrichSubmitting, setIsPeopleEnrichSubmitting] = useState(false);
+  const [peopleEnrichStatus, setPeopleEnrichStatus] = useState("");
+  const [peopleEnrichStatusType, setPeopleEnrichStatusType] = useState<ActionStatus>("idle");
+  const [isMessagingModalOpen, setIsMessagingModalOpen] = useState(false);
+  const [isMessagingWhatsappChecked, setIsMessagingWhatsappChecked] = useState(true);
+  const [isMessagingLinkedinChecked, setIsMessagingLinkedinChecked] = useState(true);
+  const [selectedMessageTitle, setSelectedMessageTitle] = useState("");
+  const [messagingWarning, setMessagingWarning] = useState("");
+  const [pushMessageOptions, setPushMessageOptions] = useState<PushMessageOption[]>([]);
+  const [isPushMessagesLoading, setIsPushMessagesLoading] = useState(false);
+  const [pushMessagesError, setPushMessagesError] = useState("");
   const sseByRowRef = useRef<Record<string, AbortController>>({});
 
   useEffect(() => {
@@ -283,7 +569,14 @@ export default function App() {
   const filteredServers = servers.filter((server) =>
     server.domainName.toLowerCase().includes(searchQuery.toLowerCase())
   );
+  const safeCurrentPeoplePage = Math.min(currentPeoplePage, totalPeoplePages);
   const selectedLogs = selectedRowKey ? logsByRow[selectedRowKey] ?? [] : [];
+
+  useEffect(() => {
+    if (currentPeoplePage > totalPeoplePages) {
+      setCurrentPeoplePage(totalPeoplePages);
+    }
+  }, [currentPeoplePage, totalPeoplePages]);
 
   const fetchServers = async () => {
     setIsLoading(true);
@@ -564,6 +857,354 @@ export default function App() {
     }
   };
 
+  const handleDisplayPeopleClick = async () => {
+    setShowSettingsPeoplePage(true);
+    setPeopleInitError("");
+    setIsPeopleInitLoading(true);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/people/page-init-data`, {
+        method: "GET",
+        headers: {
+          Accept: "application/json"
+        }
+      });
+
+      const payload = await getResponsePayload(response);
+      if (!response.ok) {
+        throw new Error(formatPayload(payload) || `Request failed with status ${response.status}`);
+      }
+
+      const { regions, skills } = normalizePeoplePageInitData(payload);
+      setPeopleRegions(regions);
+      setPeopleSkills(skills);
+      setSelectedRegion(regions.length > 0 ? String(regions[0].id) : "");
+      setSelectedSkillset(skills.length > 0 ? String(skills[0].id) : "");
+    } catch (error) {
+      setPeopleRegions([]);
+      setPeopleSkills([]);
+      setSelectedRegion("");
+      setSelectedSkillset("");
+      setPeopleInitError(error instanceof Error ? error.message : "Failed to load people page data.");
+    } finally {
+      setIsPeopleInitLoading(false);
+    }
+  };
+
+  const fetchPeopleListPage = async (
+    requestedPage: number,
+    requestedPageSize: number,
+    filters: {
+      whatsAppMsgCount: number | null;
+      linkedinMsgCount: number | null;
+    } = {
+      whatsAppMsgCount: appliedWhatsappMsgCountFilter,
+      linkedinMsgCount: appliedLinkedinMsgCountFilter
+    }
+  ) => {
+    setPeopleListError("");
+    setIsPeopleListLoading(true);
+    setPeopleEnrichStatus("");
+    setPeopleEnrichStatusType("idle");
+
+    // Parse selectedSkillset and selectedRegion as numbers (Long)
+    const skillId = selectedSkillset ? Number(selectedSkillset) : null;
+    const regionId = selectedRegion ? Number(selectedRegion) : null;
+    // Only send if both are valid numbers
+    if (!skillId || isNaN(skillId) || !regionId || isNaN(regionId)) {
+      setPeopleListError("Please select both a valid region and skill.");
+      setIsPeopleListLoading(false);
+      return;
+    }
+
+    const requestBody = {
+      skillId: skillId,
+      regionIds: [regionId],
+      whatsAppMsgCount: filters.whatsAppMsgCount,
+      linkedinMsgCount: filters.linkedinMsgCount,
+      pageNumber: requestedPage,
+      numberPerPage: requestedPageSize
+    };
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/people/search`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json"
+        },
+        body: JSON.stringify(requestBody)
+      });
+
+      const payload = await getResponsePayload(response);
+      if (!response.ok) {
+        throw new Error(formatPayload(payload) || `Request failed with status ${response.status}`);
+      }
+
+      const normalizedResponse = normalizePeopleSearchResponse(payload);
+      setPeopleList(normalizedResponse.persons);
+      setTotalPeoplePages(normalizedResponse.totalPages);
+      setCurrentPeoplePage(normalizedResponse.currentPage);
+      setPeopleRowsPerPage(normalizedResponse.pageSize);
+    } catch (error) {
+      setPeopleListError(error instanceof Error ? error.message : "Failed to load people.");
+    } finally {
+      setIsPeopleListLoading(false);
+    }
+  };
+
+  const handleDisplayPeopleList = async () => {
+    setPeopleList([]);
+    setSelectedPeopleIds(new Set<number>());
+    setHasLoadedPeopleList(true);
+    setCurrentPeoplePage(1);
+    setTotalPeoplePages(1);
+    setAppliedWhatsappMsgCountFilter(null);
+    setAppliedLinkedinMsgCountFilter(null);
+    await fetchPeopleListPage(1, peopleRowsPerPage, {
+      whatsAppMsgCount: null,
+      linkedinMsgCount: null
+    });
+  };
+
+  const handleFilterPeopleList = async () => {
+    const trimmedWhatsappMsgCount = whatsappMsgCountFilter.trim();
+    const trimmedLinkedinMsgCount = linkedinMsgCountFilter.trim();
+
+    const nextWhatsappMsgCount =
+      trimmedWhatsappMsgCount === "" ? null : Number(trimmedWhatsappMsgCount);
+    const nextLinkedinMsgCount =
+      trimmedLinkedinMsgCount === "" ? null : Number(trimmedLinkedinMsgCount);
+
+    if (
+      (nextWhatsappMsgCount !== null && !Number.isFinite(nextWhatsappMsgCount)) ||
+      (nextLinkedinMsgCount !== null && !Number.isFinite(nextLinkedinMsgCount))
+    ) {
+      setPeopleListError("Whatsapp Msg Count and Linkedin Msg Count must be valid numbers.");
+      return;
+    }
+
+    setPeopleList([]);
+    setSelectedPeopleIds(new Set<number>());
+    setHasLoadedPeopleList(true);
+    setCurrentPeoplePage(1);
+    setTotalPeoplePages(1);
+    setAppliedWhatsappMsgCountFilter(
+      nextWhatsappMsgCount === null ? null : Math.trunc(nextWhatsappMsgCount)
+    );
+    setAppliedLinkedinMsgCountFilter(
+      nextLinkedinMsgCount === null ? null : Math.trunc(nextLinkedinMsgCount)
+    );
+
+    await fetchPeopleListPage(1, peopleRowsPerPage, {
+      whatsAppMsgCount: nextWhatsappMsgCount === null ? null : Math.trunc(nextWhatsappMsgCount),
+      linkedinMsgCount: nextLinkedinMsgCount === null ? null : Math.trunc(nextLinkedinMsgCount)
+    });
+  };
+
+  const handleSubmitSelectedPeople = async () => {
+    const personsIds = Array.from(selectedPeopleIds)
+      .map((id) => Math.trunc(id))
+      .filter((id) => Number.isFinite(id));
+
+    if (personsIds.length === 0) {
+      setPeopleEnrichStatusType("error");
+      setPeopleEnrichStatus("Please select at least one person.");
+      return;
+    }
+
+    setIsPeopleEnrichSubmitting(true);
+    setPeopleEnrichStatusType("sending");
+    setPeopleEnrichStatus("Submitting request...");
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/people/enrich`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json"
+        },
+        body: JSON.stringify({ personsIds })
+      });
+
+      const payload = await getResponsePayload(response);
+      if (!response.ok) {
+        throw new Error(formatPayload(payload) || `Request failed with status ${response.status}`);
+      }
+
+      setPeopleEnrichStatusType("success");
+      setPeopleEnrichStatus(formatPayload(payload));
+    } catch (error) {
+      setPeopleEnrichStatusType("error");
+      setPeopleEnrichStatus(error instanceof Error ? error.message : "Failed to enrich selected people.");
+    } finally {
+      setIsPeopleEnrichSubmitting(false);
+    }
+  };
+
+  const handleFetchPeopleFromApolloAndSave = async () => {
+    setPeopleFetchStatusType("sending");
+    setPeopleFetchStatus("Submitting request...");
+    setIsPeopleFetchSubmitting(true);
+
+    // Parse selectedSkillset and selectedRegion as numbers (Long)
+    const skillId = selectedSkillset ? Number(selectedSkillset) : null;
+    const regionId = selectedRegion ? Number(selectedRegion) : null;
+    // Only send if both are valid numbers
+    if (!skillId || isNaN(skillId) || !regionId || isNaN(regionId)) {
+      setPeopleFetchStatusType("error");
+      setPeopleFetchStatus("Please select both a valid region and skill.");
+      setIsPeopleFetchSubmitting(false);
+      return;
+    }
+
+    const requestBody = {
+      skillId: skillId,
+      regionIds: [regionId]
+    };
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/people`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json"
+        },
+        body: JSON.stringify(requestBody)
+      });
+
+      const payload = await getResponsePayload(response);
+      if (!response.ok) {
+        throw new Error(formatPayload(payload) || `Request failed with status ${response.status}`);
+      }
+
+      setPeopleFetchStatusType("success");
+      setPeopleFetchStatus(formatPayload(payload));
+    } catch (error) {
+      setPeopleFetchStatusType("error");
+      setPeopleFetchStatus(error instanceof Error ? error.message : "Failed to fetch people from Apollo.");
+    } finally {
+      setIsPeopleFetchSubmitting(false);
+    }
+  };
+
+  const handleOpenSettingsPage = () => {
+    setActivePage("settings");
+    void handleDisplayPeopleClick();
+  };
+
+  const handleInitiateMessagingClick = async () => {
+    setSelectedMessageTitle("");
+    setIsMessagingWhatsappChecked(true);
+    setIsMessagingLinkedinChecked(true);
+    setMessagingWarning("");
+    setPushMessagesError("");
+    setIsMessagingModalOpen(true);
+
+    setIsPushMessagesLoading(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/people/getPushMsgNames`, {
+        method: "GET",
+        headers: {
+          Accept: "application/json"
+        }
+      });
+
+      const payload = await getResponsePayload(response);
+      if (!response.ok) {
+        throw new Error(formatPayload(payload) || `Request failed with status ${response.status}`);
+      }
+
+      const options = normalizePushMessageOptions(payload);
+      setPushMessageOptions(options);
+      setSelectedMessageTitle(options.length > 0 ? String(options[0].pushMsgId) : "");
+    } catch (error) {
+      setPushMessageOptions([]);
+      setSelectedMessageTitle("");
+      setPushMessagesError(
+        error instanceof Error ? error.message : "Failed to load message titles."
+      );
+    } finally {
+      setIsPushMessagesLoading(false);
+    }
+  };
+
+  const handleSendMessages = async () => {
+    setMessagingWarning("");
+
+    if (!isMessagingWhatsappChecked && !isMessagingLinkedinChecked) {
+      setPeopleEnrichStatusType("error");
+      setPeopleEnrichStatus("Please select at least one channel.");
+      return;
+    }
+
+    if (!selectedMessageTitle) {
+      setPeopleEnrichStatusType("error");
+      setPeopleEnrichStatus("Please select a message title.");
+      return;
+    }
+
+    const selectedPeople = peopleList.filter((person) => {
+      const numericPersonId =
+        typeof person.personId === "number"
+          ? person.personId
+          : typeof person.personId === "string"
+            ? Number(person.personId)
+            : NaN;
+      const normalizedPersonId = Number.isFinite(numericPersonId) ? Math.trunc(numericPersonId) : null;
+
+      return normalizedPersonId !== null && selectedPeopleIds.has(normalizedPersonId);
+    });
+
+    if (selectedPeople.length === 0) {
+      setMessagingWarning("Please select at least one person");
+      return;
+    }
+
+    const persons = selectedPeople.map((person) => ({
+      personId: String(person.personId ?? ""),
+      mobile: person.mobile,
+      linkedin: person.linkedin,
+      titleId: person.titleId ? Number(person.titleId) : null
+    }));
+
+    setIsPeopleEnrichSubmitting(true);
+    setPeopleEnrichStatusType("sending");
+    setPeopleEnrichStatus("Sending messages...");
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/people/sendMessages`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json"
+        },
+        body: JSON.stringify({
+          isWhatsappSelected: isMessagingWhatsappChecked,
+          isLinkedinSelected: isMessagingLinkedinChecked,
+          whatsappSelected: isMessagingWhatsappChecked,
+          linkedinSelected: isMessagingLinkedinChecked,
+          pushMsgId: Number(selectedMessageTitle),
+          persons
+        })
+      });
+
+      const payload = await getResponsePayload(response);
+      if (!response.ok) {
+        throw new Error(formatPayload(payload) || `Request failed with status ${response.status}`);
+      }
+
+      setPeopleEnrichStatusType("success");
+      setPeopleEnrichStatus(formatPayload(payload));
+    } catch (error) {
+      setPeopleEnrichStatusType("error");
+      setPeopleEnrichStatus(error instanceof Error ? error.message : "Failed to send messages.");
+    } finally {
+      setIsPeopleEnrichSubmitting(false);
+      setIsMessagingModalOpen(false);
+    }
+  };
+
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-white text-slate-900">
       <header className="sticky top-0 z-10 border-b-[0.25px] border-slate-200 bg-white/95 backdrop-blur">
@@ -604,15 +1245,19 @@ export default function App() {
                 📊
               </button>
               <button
-                onClick={() => setActivePage("settings")}
+                onClick={handleOpenSettingsPage}
                 className={`w-10 h-10 rounded flex items-center justify-center transition-colors ${
                   activePage === "settings"
-                    ? "bg-[#e8471b] text-white"
-                    : "hover:bg-slate-200 text-slate-600"
+                    ? "bg-[#e8471b]"
+                    : "hover:bg-slate-200"
                 }`}
-                title="Settings"
+                title="Dhurandar"
               >
-                ⚙️
+                <img
+                  src="/icons/dhurandar.png"
+                  alt="Dhurandar"
+                  className="h-8 w-8 rounded object-cover"
+                />
               </button>
               <button
                 onClick={() => setActivePage("about")}
@@ -827,33 +1472,327 @@ export default function App() {
 
             {/* Settings Page */}
             {activePage === "settings" && (
-              <div className="h-full overflow-y-auto px-8 py-8">
-                <div className="max-w-2xl">
-                  <h2 className="text-3xl font-bold text-slate-900 mb-6">Settings</h2>
-                  <div className="space-y-6">
-                    <div className="border-[0.25px] border-slate-200 rounded-lg p-6 bg-slate-50">
-                      <h3 className="text-lg font-semibold text-slate-900 mb-2">Server Configuration</h3>
-                      <p className="text-sm text-slate-600 mb-4">Configure API endpoints and connection settings</p>
-                      <button className="px-4 py-2 bg-[#e8471b] text-white rounded hover:bg-[#c73a14] transition-colors">
-                        Configure Servers
-                      </button>
+              <div className="h-full p-4">
+                {showSettingsPeoplePage ? (
+                  <div className="h-full rounded-lg border-[0.25px] border-slate-200 bg-white grid grid-rows-[10%_90%]">
+                      <div className="flex items-center gap-3 border-b-[0.25px] border-slate-200 px-4">
+                        <label className="text-xs text-slate-700">
+                          Region
+                          <select
+                            value={selectedRegion}
+                            onChange={(event) => setSelectedRegion(event.target.value)}
+                            className="ml-2 rounded border border-slate-300 px-2 py-1 text-xs text-slate-900 focus:border-[#e8471b] focus:outline-none"
+                          >
+                            <option value="" disabled>
+                              {isPeopleInitLoading ? "Loading regions..." : "Select Region"}
+                            </option>
+                            {peopleRegions.map((region) => (
+                              <option key={region.id} value={String(region.id)}>
+                                {region.regionName}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <label className="text-xs text-slate-700">
+                          Skills
+                          <select
+                            value={selectedSkillset}
+                            onChange={(event) => setSelectedSkillset(event.target.value)}
+                            className="ml-2 rounded border border-slate-300 px-2 py-1 text-xs text-slate-900 focus:border-[#e8471b] focus:outline-none"
+                          >
+                            <option value="" disabled>
+                              {isPeopleInitLoading ? "Loading skills..." : "Select Skill"}
+                            </option>
+                            {peopleSkills.map((skill) => (
+                              <option key={skill.id} value={String(skill.id)}>
+                                {skill.skillName}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+
+                        <button
+                          type="button"
+                          onClick={handleFetchPeopleFromApolloAndSave}
+                          disabled={isPeopleFetchSubmitting}
+                          className="rounded bg-[#e8471b] px-3 py-1 text-xs font-semibold text-white hover:bg-[#c73a14]"
+                        >
+                          {isPeopleFetchSubmitting ? "Submitting..." : "Fetch"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleDisplayPeopleList}
+                          disabled={isPeopleListLoading}
+                          className="rounded bg-[#e8471b] px-3 py-1 text-xs font-semibold text-white hover:bg-[#c73a14]"
+                          style={{ marginLeft: 8 }}
+                        >
+                          {isPeopleListLoading ? "Loading..." : "Display"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleSubmitSelectedPeople}
+                          disabled={isPeopleEnrichSubmitting}
+                          className="rounded bg-[#e8471b] px-3 py-1 text-xs font-semibold text-white hover:bg-[#c73a14] disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {isPeopleEnrichSubmitting ? "Enriching..." : "Enrich"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleInitiateMessagingClick}
+                          disabled={isPeopleEnrichSubmitting}
+                          className="rounded bg-[#e8471b] px-3 py-1 text-xs font-semibold text-white hover:bg-[#c73a14] disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {isPeopleEnrichSubmitting ? "Sending..." : "Campaign"}
+                        </button>
+                      </div>
+
+                      <div className="min-h-0 overflow-y-auto px-4 py-3 text-sm text-slate-600">
+                        {isPeopleListLoading ? (
+                          <p className="text-xs text-slate-400 px-2 py-2">Loading people...</p>
+                        ) : peopleListError ? (
+                          <p className="rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                            {peopleListError}
+                          </p>
+                        ) : hasLoadedPeopleList ? (
+                          <>
+                            <div className="mb-2 flex items-center justify-between gap-3">
+                              {peopleEnrichStatus ? (
+                                <span
+                                  className={`max-w-[60%] whitespace-pre-wrap break-words rounded border px-3 py-1 text-xs ${
+                                    peopleEnrichStatusType === "error"
+                                      ? "border-red-200 bg-red-50 text-red-700"
+                                      : peopleEnrichStatusType === "success"
+                                        ? "border-green-200 bg-green-50 text-green-700"
+                                        : "border-slate-200 bg-slate-50 text-slate-700"
+                                  }`}
+                                >
+                                  {peopleEnrichStatus}
+                                </span>
+                              ) : <span className="text-xs text-slate-500">&nbsp;</span>}
+
+                              <div className="ml-auto flex items-center gap-2">
+                                <div className="inline-flex items-center gap-2 rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                                  <label className="flex items-center gap-1">
+                                    <span>Whatsapp Msg Count</span>
+                                    <input
+                                      type="text"
+                                      value={whatsappMsgCountFilter}
+                                      onChange={(event) => setWhatsappMsgCountFilter(event.target.value)}
+                                      className="w-20 rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-900 focus:border-[#e8471b] focus:outline-none"
+                                    />
+                                  </label>
+                                  <label className="flex items-center gap-1">
+                                    <span>Linkedin Msg Count</span>
+                                    <input
+                                      type="text"
+                                      value={linkedinMsgCountFilter}
+                                      onChange={(event) => setLinkedinMsgCountFilter(event.target.value)}
+                                      className="w-20 rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-900 focus:border-[#e8471b] focus:outline-none"
+                                    />
+                                  </label>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      void handleFilterPeopleList();
+                                    }}
+                                    className="rounded bg-[#e8471b] px-2.5 py-1 text-xs font-semibold text-white hover:bg-[#c73a14]"
+                                  >
+                                    Filter
+                                  </button>
+                                </div>
+
+                                <div className="inline-flex items-center gap-2 rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                                  <label className="flex items-center gap-1">
+                                    <span>Rows</span>
+                                    <select
+                                      value={peopleRowsPerPage}
+                                      onChange={(event) => {
+                                        const nextPageSize = Number(event.target.value);
+                                        void fetchPeopleListPage(1, nextPageSize);
+                                      }}
+                                      className="rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-900 focus:border-[#e8471b] focus:outline-none"
+                                    >
+                                      <option value={10}>10</option>
+                                      <option value={25}>25</option>
+                                      <option value={50}>50</option>
+                                    </select>
+                                  </label>
+                                  <span className="rounded border border-slate-300 bg-white px-2 py-1 font-medium text-slate-700">
+                                    Page {safeCurrentPeoplePage} / {totalPeoplePages}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (safeCurrentPeoplePage <= 1) {
+                                        return;
+                                      }
+                                      void fetchPeopleListPage(1, peopleRowsPerPage);
+                                    }}
+                                    disabled={safeCurrentPeoplePage <= 1}
+                                    className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    First
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (safeCurrentPeoplePage <= 1) {
+                                        return;
+                                      }
+                                      void fetchPeopleListPage(safeCurrentPeoplePage - 1, peopleRowsPerPage);
+                                    }}
+                                    disabled={safeCurrentPeoplePage <= 1}
+                                    className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    Prev
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (safeCurrentPeoplePage >= totalPeoplePages) {
+                                        return;
+                                      }
+                                      void fetchPeopleListPage(safeCurrentPeoplePage + 1, peopleRowsPerPage);
+                                    }}
+                                    disabled={safeCurrentPeoplePage >= totalPeoplePages}
+                                    className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    Next
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (safeCurrentPeoplePage >= totalPeoplePages) {
+                                        return;
+                                      }
+                                      void fetchPeopleListPage(totalPeoplePages, peopleRowsPerPage);
+                                    }}
+                                    disabled={safeCurrentPeoplePage >= totalPeoplePages}
+                                    className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    Last
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                            <table className="w-full border-collapse text-left text-xs">
+                              <thead>
+                                <tr className="border-b border-slate-200 bg-slate-50 text-slate-700">
+                                  <th className="px-2 py-2 w-8"></th>
+                                  <th className="px-2 py-2 font-medium">ApolloId</th>
+                                  <th className="px-2 py-2 font-medium">First Name</th>
+                                  <th className="px-2 py-2 font-medium">Last Name</th>
+                                  <th className="px-2 py-2 font-medium">Title</th>                                  
+                                  <th className="px-2 py-2 font-medium">Mobile</th>
+                                  <th className="px-2 py-2 font-medium">Linkedin</th>
+                                  <th className="px-2 py-2 font-medium text-center">LinkedinT</th>
+                                  <th className="px-2 py-2 font-medium text-center">WhatsAppT</th>
+                                  <th className="px-2 py-2 font-medium">Organization</th>
+                                  <th className="px-2 py-2 font-medium">Skill Name</th>
+                                  <th className="px-2 py-2 font-medium">Country</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {peopleList.map((person, idx) => {
+                                  const numericPersonId =
+                                    typeof person.personId === "number"
+                                      ? person.personId
+                                      : typeof person.personId === "string"
+                                        ? Number(person.personId)
+                                        : NaN;
+                                  const normalizedPersonId = Number.isFinite(numericPersonId)
+                                    ? Math.trunc(numericPersonId)
+                                    : null;
+                                  const rowId = person.personId ?? person.apolloId ?? idx;
+                                  const isChecked =
+                                    normalizedPersonId !== null && selectedPeopleIds.has(normalizedPersonId);
+                                  return (
+                                    <tr
+                                      key={rowId}
+                                      className={`border-b border-slate-100 ${isChecked ? "bg-orange-50" : "hover:bg-slate-50"}`}
+                                    >
+                                      <td className="px-2 py-1">
+                                        <input
+                                          type="checkbox"
+                                          name="personsIds"
+                                          value={normalizedPersonId !== null ? String(normalizedPersonId) : ""}
+                                          checked={isChecked}
+                                          disabled={normalizedPersonId === null}
+                                          onChange={() => {
+                                            if (normalizedPersonId === null) {
+                                              return;
+                                            }
+                                            setSelectedPeopleIds((prev) => {
+                                              const next = new Set(prev);
+                                              if (next.has(normalizedPersonId)) {
+                                                next.delete(normalizedPersonId);
+                                              } else {
+                                                next.add(normalizedPersonId);
+                                              }
+                                              return next;
+                                            });
+                                          }}
+                                        />
+                                      </td>
+                                      <td className="px-2 py-1 text-slate-700">{String(person.apolloId ?? "")}</td>
+                                      <td className="px-2 py-1 text-slate-700">{person.firstName}</td>
+                                      <td className="px-2 py-1 text-slate-700">{person.lastName}</td>
+                                      <td className="px-2 py-1 text-slate-700">{person.title}</td>                                      
+                                      <td className="px-2 py-1 text-slate-700">{person.mobile}</td>
+                                      <td className="px-2 py-1 text-slate-700">
+                                        {person.linkedin ? (
+                                          <a href={person.linkedin} target="_blank" rel="noopener noreferrer" className="text-[#e8471b] underline break-all">{person.linkedin}</a>
+                                        ) : ""}
+                                      </td>
+                                      <td className="px-2 py-1 text-center text-slate-700">
+                                        {person.linkedinMsgCount ?? "-"}
+                                      </td>
+                                      <td className="px-2 py-1 text-center text-slate-700">
+                                        {person.whatsappMsgCount ?? "-"}
+                                      </td>
+                                      <td className="px-2 py-1 text-slate-700">{person.organization}</td>
+                                      <td className="px-2 py-1 text-slate-700">{person.skillName}</td>
+                                      <td className="px-2 py-1 text-slate-700">{person.country}</td>
+                                    </tr>
+                                  );
+                                })}
+                                {peopleList.length === 0 && (
+                                  <tr>
+                                    <td colSpan={12} className="px-2 py-6 text-center text-slate-500">
+                                      No records to display.
+                                    </td>
+                                  </tr>
+                                )}
+                              </tbody>
+                            </table>
+                          </>
+                        ) : peopleInitError ? (
+                          <p className="rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                            {peopleInitError}
+                          </p>
+                        ) : peopleFetchStatus ? (
+                          <pre
+                            className={`whitespace-pre-wrap break-words rounded border px-3 py-2 text-xs ${
+                              peopleFetchStatusType === "error"
+                                ? "border-red-200 bg-red-50 text-red-700"
+                                : peopleFetchStatusType === "success"
+                                  ? "border-green-200 bg-green-50 text-green-700"
+                                  : "border-slate-200 bg-slate-50 text-slate-700"
+                            }`}
+                          >
+                            {peopleFetchStatus}
+                          </pre>
+                        ) : (
+                          "People page content area"
+                        )}
+                      </div>
                     </div>
-                    <div className="border-[0.25px] border-slate-200 rounded-lg p-6 bg-slate-50">
-                      <h3 className="text-lg font-semibold text-slate-900 mb-2">Display Preferences</h3>
-                      <p className="text-sm text-slate-600 mb-4">Customize the appearance and layout</p>
-                      <button className="px-4 py-2 bg-[#e8471b] text-white rounded hover:bg-[#c73a14] transition-colors">
-                        Customize Theme
-                      </button>
-                    </div>
-                    <div className="border-[0.25px] border-slate-200 rounded-lg p-6 bg-slate-50">
-                      <h3 className="text-lg font-semibold text-slate-900 mb-2">Advanced Settings</h3>
-                      <p className="text-sm text-slate-600 mb-4">Advanced options for power users</p>
-                      <button className="px-4 py-2 bg-[#e8471b] text-white rounded hover:bg-[#c73a14] transition-colors">
-                        Advanced Options
-                      </button>
-                    </div>
+                ) : (
+                  <div className="flex h-full items-center justify-center rounded-lg border-[0.25px] border-dashed border-slate-300 bg-slate-50 text-sm text-slate-600">
+                    Loading people page...
                   </div>
-                </div>
+                )}
               </div>
             )}
 
@@ -885,6 +1824,81 @@ export default function App() {
           </div>
         </div>
       </main>
+
+      {isMessagingModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
+          <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-2xl">
+            <h3 className="text-base font-semibold text-slate-900">Initiate Messaging</h3>
+            {messagingWarning && (
+              <div className="mt-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                {messagingWarning}
+              </div>
+            )}
+            <div className="mt-4 space-y-3 text-sm text-slate-700">
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={isMessagingWhatsappChecked}
+                  onChange={(event) => setIsMessagingWhatsappChecked(event.target.checked)}
+                />
+                <span>WhatsApp</span>
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={isMessagingLinkedinChecked}
+                  onChange={(event) => setIsMessagingLinkedinChecked(event.target.checked)}
+                />
+                <span>Linkedin</span>
+              </label>
+              <label className="flex flex-col gap-1">
+                <span>Message Title</span>
+                <select
+                  value={selectedMessageTitle}
+                  onChange={(event) => setSelectedMessageTitle(event.target.value)}
+                  disabled={isPushMessagesLoading || pushMessageOptions.length === 0}
+                  className="rounded border border-slate-300 px-2 py-2 text-sm text-slate-900 focus:border-[#e8471b] focus:outline-none"
+                >
+                  <option value="" disabled>
+                    {isPushMessagesLoading
+                      ? "Loading message titles..."
+                      : pushMessageOptions.length === 0
+                        ? "No message titles available"
+                        : "Select Message Title"}
+                  </option>
+                  {pushMessageOptions.map((message) => (
+                    <option key={String(message.pushMsgId)} value={String(message.pushMsgId)}>
+                      {message.pushMsgName}
+                    </option>
+                  ))}
+                </select>
+                {pushMessagesError && <span className="text-xs text-red-700">{pushMessagesError}</span>}
+              </label>
+            </div>
+
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setMessagingWarning("");
+                  setIsMessagingModalOpen(false);
+                }}
+                className="rounded border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSendMessages}
+                disabled={isPeopleEnrichSubmitting}
+                className="rounded bg-[#e8471b] px-4 py-2 text-sm font-semibold text-white hover:bg-[#c73a14] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isPeopleEnrichSubmitting ? "Sending..." : "Send Messages"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {isAddServerOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
