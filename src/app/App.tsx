@@ -64,6 +64,7 @@ type PeopleRow = {
   skillName: string;
   country: string;
   mobile: string;
+  email: string;
   linkedin: string;
   organization: string;
   isWhatsApp: boolean;
@@ -314,6 +315,7 @@ function normalizePeopleList(payload: unknown): PeopleRow[] {
       skillName: getText(row.skillName ?? row.skill_name, ""),
       country: getText(row.country ?? row.countryName ?? row.country_name ?? "", ""),
       mobile: getText(row.mobile ?? row.phone ?? row.mobilePhone, ""),
+      email: getText(row.email ?? row.emailAddress ?? row.email_id, ""),
       linkedin: getText(row.linkedin ?? row.linkedinUrl ?? row.linkedin_url, ""),
       isWhatsApp:
         typeof row.isWhatsApp === "boolean"
@@ -1685,6 +1687,7 @@ export default function App() {
                                   <th className="px-2 py-2 font-medium">Last Name</th>
                                   <th className="px-2 py-2 font-medium">Title</th>                                  
                                   <th className="px-2 py-2 font-medium">Mobile</th>
+                                  <th className="px-2 py-2 font-medium">Email</th>
                                   <th className="px-2 py-2 font-medium">Linkedin</th>
                                   <th className="px-2 py-2 font-medium text-center">LinkedinT</th>
                                   <th className="px-2 py-2 font-medium text-center">WhatsAppT</th>
@@ -1740,6 +1743,7 @@ export default function App() {
                                       <td className="px-2 py-1 text-slate-700">{person.lastName}</td>
                                       <td className="px-2 py-1 text-slate-700">{person.title}</td>                                      
                                       <td className="px-2 py-1 text-slate-700">{person.mobile}</td>
+                                      <td className="px-2 py-1 text-slate-700 break-all">{person.email}</td>
                                       <td className="px-2 py-1 text-slate-700">
                                         {person.linkedin ? (
                                           <a href={person.linkedin} target="_blank" rel="noopener noreferrer" className="text-[#e8471b] underline break-all">{person.linkedin}</a>
@@ -1759,7 +1763,7 @@ export default function App() {
                                 })}
                                 {peopleList.length === 0 && (
                                   <tr>
-                                    <td colSpan={12} className="px-2 py-6 text-center text-slate-500">
+                                    <td colSpan={13} className="px-2 py-6 text-center text-slate-500">
                                       No records to display.
                                     </td>
                                   </tr>
