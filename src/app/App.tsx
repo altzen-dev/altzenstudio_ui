@@ -44,11 +44,6 @@ type PersistedUiState = {
 
 const UI_STATE_STORAGE_KEY = "altzen-cockpit-ui-state-v1";
 
-type RegionOption = {
-  id: string | number;
-  regionName: string;
-};
-
 type SkillOption = {
   id: string | number;
   skillName: string;
@@ -65,6 +60,7 @@ type PeopleRow = {
   country: string;
   mobile: string;
   email: string;
+  personMsgStatusId: string | number | null;
   linkedin: string;
   organization: string;
   isWhatsApp: boolean;
@@ -76,6 +72,11 @@ type PeopleRow = {
 type PushMessageOption = {
   pushMsgId: string | number;
   pushMsgName: string;
+};
+
+type MsgStatusOption = {
+  value: string;
+  label: string;
 };
 
 function handleSSELogging(
@@ -214,21 +215,11 @@ function formatPayload(payload: unknown) {
 }
 
 function normalizePeoplePageInitData(payload: unknown): {
-  regions: RegionOption[];
   skills: SkillOption[];
 } {
   const parsed = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
   const data =
     parsed.data && typeof parsed.data === "object" ? (parsed.data as Record<string, unknown>) : parsed;
-
-  const regionsSource =
-    Array.isArray(data.regions)
-      ? data.regions
-      : Array.isArray(data.regionList)
-        ? data.regionList
-        : Array.isArray(data.region)
-          ? data.region
-          : [];
 
   const skillsSource =
     Array.isArray(data.skills)
@@ -238,25 +229,6 @@ function normalizePeoplePageInitData(payload: unknown): {
         : Array.isArray(data.skillSet)
           ? data.skillSet
           : [];
-
-  const regions = regionsSource.reduce<RegionOption[]>((accumulator, entry) => {
-    if (!entry || typeof entry !== "object") {
-      return accumulator;
-    }
-
-    const row = entry as Record<string, unknown>;
-    const idCandidate = row.regionId ?? row.id ?? null;
-    if (typeof idCandidate !== "string" && typeof idCandidate !== "number") {
-      return accumulator;
-    }
-
-    accumulator.push({
-      id: idCandidate,
-      regionName: getText(row.regionName ?? row.name, "Unknown Region")
-    });
-
-    return accumulator;
-  }, []);
 
   const skills = skillsSource.reduce<SkillOption[]>((accumulator, entry) => {
     if (!entry || typeof entry !== "object") {
@@ -277,7 +249,7 @@ function normalizePeoplePageInitData(payload: unknown): {
     return accumulator;
   }, []);
 
-  return { regions, skills };
+  return { skills };
 }
 
 function normalizePeopleList(payload: unknown): PeopleRow[] {
@@ -302,6 +274,8 @@ function normalizePeopleList(payload: unknown): PeopleRow[] {
     const personIdCandidate = row.personId ?? row.person_id ?? row.id ?? row.apolloId ?? row.apollo_id ?? null;
     const idCandidate = row.apolloId ?? row.apollo_id ?? row.id ?? null;
     const titleIdCandidate = row.titleId ?? row.title_id ?? row.titleID ?? null;
+    const personMsgStatusIdCandidate =
+      row.personMsgStatusId ?? row.person_msg_status_id ?? row.msgStatusId ?? row.msg_status_id ?? null;
     acc.push({
       personId:
         typeof personIdCandidate === "string" || typeof personIdCandidate === "number"
@@ -316,6 +290,10 @@ function normalizePeopleList(payload: unknown): PeopleRow[] {
       country: getText(row.country ?? row.countryName ?? row.country_name ?? "", ""),
       mobile: getText(row.mobile ?? row.phone ?? row.mobilePhone, ""),
       email: getText(row.email ?? row.emailAddress ?? row.email_id, ""),
+      personMsgStatusId:
+        typeof personMsgStatusIdCandidate === "string" || typeof personMsgStatusIdCandidate === "number"
+          ? personMsgStatusIdCandidate
+          : null,
       linkedin: getText(row.linkedin ?? row.linkedinUrl ?? row.linkedin_url, ""),
       isWhatsApp:
         typeof row.isWhatsApp === "boolean"
@@ -352,6 +330,7 @@ function normalizePeopleList(payload: unknown): PeopleRow[] {
 
 function normalizePeopleSearchResponse(payload: unknown): {
   persons: PeopleRow[];
+  msgStatuses: MsgStatusOption[];
   totalPages: number;
   currentPage: number;
   pageSize: number;
@@ -365,6 +344,52 @@ function normalizePeopleSearchResponse(payload: unknown): {
     : Array.isArray(parsed.persons)
       ? normalizePeopleList(parsed.persons)
       : normalizePeopleList(payload);
+
+  const msgStatusesSource = data.msgStatuses ?? parsed.msgStatuses;
+  const msgStatuses = Array.isArray(msgStatusesSource)
+    ? msgStatusesSource.reduce<MsgStatusOption[]>((accumulator, entry) => {
+        if (typeof entry === "string" || typeof entry === "number") {
+          const text = String(entry).trim();
+          const numericId = Number(text);
+          if (text.length > 0 && Number.isFinite(numericId)) {
+            accumulator.push({ value: String(Math.trunc(numericId)), label: text });
+          }
+          return accumulator;
+        }
+
+        if (!entry || typeof entry !== "object") {
+          return accumulator;
+        }
+
+        const row = entry as Record<string, unknown>;
+        const statusIdCandidate =
+          row.personMsgStatusId ??
+          row.person_msg_status_id ??
+          row.msgStatusId ??
+          row.msg_status_id ??
+          row.id ??
+          row.code ??
+          row.value ??
+          row.status;
+        const valueText = getText(statusIdCandidate, "");
+        const labelText = getText(
+          row.label ?? row.statusName ?? row.msgStatusName ?? row.personMsgStatusName ?? row.name ?? row.value ?? row.status,
+          ""
+        );
+        const numericId = Number(valueText);
+
+        if (valueText.length === 0 || labelText.length === 0 || !Number.isFinite(numericId)) {
+          return accumulator;
+        }
+
+        accumulator.push({
+          value: String(Math.trunc(numericId)),
+          label: labelText
+        });
+
+        return accumulator;
+      }, [])
+    : [];
 
   const totalPagesCandidate = data.totalPages ?? parsed.totalPages;
   const currentPageCandidate = data.currentPage ?? parsed.currentPage;
@@ -391,6 +416,7 @@ function normalizePeopleSearchResponse(payload: unknown): {
 
   return {
     persons,
+    msgStatuses,
     totalPages: Number.isFinite(totalPagesNumber) && totalPagesNumber > 0 ? Math.trunc(totalPagesNumber) : 1,
     currentPage:
       Number.isFinite(currentPageNumber) && currentPageNumber > 0 ? Math.trunc(currentPageNumber) : 1,
@@ -458,9 +484,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [activePage, setActivePage] = useState<"dashboard" | "settings" | "about">("dashboard");
   const [showSettingsPeoplePage, setShowSettingsPeoplePage] = useState(false);
-  const [selectedRegion, setSelectedRegion] = useState("");
   const [selectedSkillset, setSelectedSkillset] = useState("");
-  const [peopleRegions, setPeopleRegions] = useState<RegionOption[]>([]);
   const [peopleSkills, setPeopleSkills] = useState<SkillOption[]>([]);
   const [isPeopleInitLoading, setIsPeopleInitLoading] = useState(false);
   const [peopleInitError, setPeopleInitError] = useState("");
@@ -479,8 +503,16 @@ export default function App() {
   const [currentPeoplePage, setCurrentPeoplePage] = useState(1);
   const [totalPeoplePages, setTotalPeoplePages] = useState(1);
   const [peopleRowsPerPage, setPeopleRowsPerPage] = useState(25);
+  const [peopleMsgStatuses, setPeopleMsgStatuses] = useState<MsgStatusOption[]>([]);
+  const [selectedStatusByPersonId, setSelectedStatusByPersonId] = useState<Record<number, string>>({});
+  const [statusFilter, setStatusFilter] = useState("");
+  const [countryFilter, setCountryFilter] = useState("");
+  const [isMobilePresentFilter, setIsMobilePresentFilter] = useState("select");
   const [whatsappMsgCountFilter, setWhatsappMsgCountFilter] = useState("");
   const [linkedinMsgCountFilter, setLinkedinMsgCountFilter] = useState("");
+  const [appliedStatusFilter, setAppliedStatusFilter] = useState<number | null>(null);
+  const [appliedCountryFilter, setAppliedCountryFilter] = useState("");
+  const [appliedIsMobilePresentFilter, setAppliedIsMobilePresentFilter] = useState<string | null>(null);
   const [appliedWhatsappMsgCountFilter, setAppliedWhatsappMsgCountFilter] = useState<number | null>(null);
   const [appliedLinkedinMsgCountFilter, setAppliedLinkedinMsgCountFilter] = useState<number | null>(null);
   const [selectedPeopleIds, setSelectedPeopleIds] = useState<Set<number>>(new Set());
@@ -573,6 +605,24 @@ export default function App() {
   );
   const safeCurrentPeoplePage = Math.min(currentPeoplePage, totalPeoplePages);
   const selectedLogs = selectedRowKey ? logsByRow[selectedRowKey] ?? [] : [];
+  const currentPageSelectablePeopleIds = peopleList.reduce<number[]>((accumulator, person) => {
+    const numericPersonId =
+      typeof person.personId === "number"
+        ? person.personId
+        : typeof person.personId === "string"
+          ? Number(person.personId)
+          : NaN;
+    const normalizedPersonId = Number.isFinite(numericPersonId) ? Math.trunc(numericPersonId) : null;
+
+    if (normalizedPersonId !== null) {
+      accumulator.push(normalizedPersonId);
+    }
+
+    return accumulator;
+  }, []);
+  const isCurrentPageFullySelected =
+    currentPageSelectablePeopleIds.length > 0 &&
+    currentPageSelectablePeopleIds.every((personId) => selectedPeopleIds.has(personId));
 
   useEffect(() => {
     if (currentPeoplePage > totalPeoplePages) {
@@ -877,15 +927,11 @@ export default function App() {
         throw new Error(formatPayload(payload) || `Request failed with status ${response.status}`);
       }
 
-      const { regions, skills } = normalizePeoplePageInitData(payload);
-      setPeopleRegions(regions);
+      const { skills } = normalizePeoplePageInitData(payload);
       setPeopleSkills(skills);
-      setSelectedRegion(regions.length > 0 ? String(regions[0].id) : "");
       setSelectedSkillset(skills.length > 0 ? String(skills[0].id) : "");
     } catch (error) {
-      setPeopleRegions([]);
       setPeopleSkills([]);
-      setSelectedRegion("");
       setSelectedSkillset("");
       setPeopleInitError(error instanceof Error ? error.message : "Failed to load people page data.");
     } finally {
@@ -899,9 +945,15 @@ export default function App() {
     filters: {
       whatsAppMsgCount: number | null;
       linkedinMsgCount: number | null;
+      personMsgStatusId: number | null;
+      country: string;
+      isMobilePresent: string | null;
     } = {
       whatsAppMsgCount: appliedWhatsappMsgCountFilter,
-      linkedinMsgCount: appliedLinkedinMsgCountFilter
+      linkedinMsgCount: appliedLinkedinMsgCountFilter,
+      personMsgStatusId: appliedStatusFilter,
+      country: appliedCountryFilter,
+      isMobilePresent: appliedIsMobilePresentFilter
     }
   ) => {
     setPeopleListError("");
@@ -909,23 +961,23 @@ export default function App() {
     setPeopleEnrichStatus("");
     setPeopleEnrichStatusType("idle");
 
-    // Parse selectedSkillset and selectedRegion as numbers (Long)
+    // Parse selectedSkillset as number (Long)
     const skillId = selectedSkillset ? Number(selectedSkillset) : null;
-    const regionId = selectedRegion ? Number(selectedRegion) : null;
-    // Only send if both are valid numbers
-    if (!skillId || isNaN(skillId) || !regionId || isNaN(regionId)) {
-      setPeopleListError("Please select both a valid region and skill.");
+    if (!skillId || isNaN(skillId)) {
+      setPeopleListError("Please select a valid skill.");
       setIsPeopleListLoading(false);
       return;
     }
 
     const requestBody = {
       skillId: skillId,
-      regionIds: [regionId],
       whatsAppMsgCount: filters.whatsAppMsgCount,
       linkedinMsgCount: filters.linkedinMsgCount,
       pageNumber: requestedPage,
-      numberPerPage: requestedPageSize
+      numberPerPage: requestedPageSize,
+      ...(filters.personMsgStatusId !== null ? { personMsgStatusId: filters.personMsgStatusId } : {}),
+      ...(filters.country.length > 0 ? { country: filters.country } : {}),
+      ...(filters.isMobilePresent !== null ? { isMobilePresent: filters.isMobilePresent } : {})
     };
 
     try {
@@ -945,6 +997,7 @@ export default function App() {
 
       const normalizedResponse = normalizePeopleSearchResponse(payload);
       setPeopleList(normalizedResponse.persons);
+      setPeopleMsgStatuses(normalizedResponse.msgStatuses);
       setTotalPeoplePages(normalizedResponse.totalPages);
       setCurrentPeoplePage(normalizedResponse.currentPage);
       setPeopleRowsPerPage(normalizedResponse.pageSize);
@@ -957,40 +1010,61 @@ export default function App() {
 
   const handleDisplayPeopleList = async () => {
     setPeopleList([]);
+    setPeopleMsgStatuses([]);
+    setSelectedStatusByPersonId({});
     setSelectedPeopleIds(new Set<number>());
     setHasLoadedPeopleList(true);
     setCurrentPeoplePage(1);
     setTotalPeoplePages(1);
+    setAppliedStatusFilter(null);
+    setAppliedCountryFilter("");
+    setAppliedIsMobilePresentFilter(null);
     setAppliedWhatsappMsgCountFilter(null);
     setAppliedLinkedinMsgCountFilter(null);
     await fetchPeopleListPage(1, peopleRowsPerPage, {
       whatsAppMsgCount: null,
-      linkedinMsgCount: null
+      linkedinMsgCount: null,
+      personMsgStatusId: null,
+      country: "",
+      isMobilePresent: null
     });
   };
 
   const handleFilterPeopleList = async () => {
+    const trimmedStatus = statusFilter.trim();
+    const trimmedCountry = countryFilter.trim();
     const trimmedWhatsappMsgCount = whatsappMsgCountFilter.trim();
     const trimmedLinkedinMsgCount = linkedinMsgCountFilter.trim();
 
+    const nextStatus = trimmedStatus === "" ? null : Number(trimmedStatus);
     const nextWhatsappMsgCount =
       trimmedWhatsappMsgCount === "" ? null : Number(trimmedWhatsappMsgCount);
     const nextLinkedinMsgCount =
       trimmedLinkedinMsgCount === "" ? null : Number(trimmedLinkedinMsgCount);
+    const nextIsMobilePresent =
+      isMobilePresentFilter === "yes" ? "yes" : isMobilePresentFilter === "no" ? "no" : null;
 
     if (
+      (nextStatus !== null && !Number.isFinite(nextStatus)) ||
       (nextWhatsappMsgCount !== null && !Number.isFinite(nextWhatsappMsgCount)) ||
       (nextLinkedinMsgCount !== null && !Number.isFinite(nextLinkedinMsgCount))
     ) {
-      setPeopleListError("Whatsapp Msg Count and Linkedin Msg Count must be valid numbers.");
+      setPeopleListError(
+        "Status, Whatsapp Msg Count and Linkedin Msg Count must be valid numbers."
+      );
       return;
     }
 
     setPeopleList([]);
+    setPeopleMsgStatuses([]);
+    setSelectedStatusByPersonId({});
     setSelectedPeopleIds(new Set<number>());
     setHasLoadedPeopleList(true);
     setCurrentPeoplePage(1);
     setTotalPeoplePages(1);
+    setAppliedStatusFilter(nextStatus === null ? null : Math.trunc(nextStatus));
+    setAppliedCountryFilter(trimmedCountry);
+    setAppliedIsMobilePresentFilter(nextIsMobilePresent);
     setAppliedWhatsappMsgCountFilter(
       nextWhatsappMsgCount === null ? null : Math.trunc(nextWhatsappMsgCount)
     );
@@ -1000,7 +1074,10 @@ export default function App() {
 
     await fetchPeopleListPage(1, peopleRowsPerPage, {
       whatsAppMsgCount: nextWhatsappMsgCount === null ? null : Math.trunc(nextWhatsappMsgCount),
-      linkedinMsgCount: nextLinkedinMsgCount === null ? null : Math.trunc(nextLinkedinMsgCount)
+      linkedinMsgCount: nextLinkedinMsgCount === null ? null : Math.trunc(nextLinkedinMsgCount),
+      personMsgStatusId: nextStatus === null ? null : Math.trunc(nextStatus),
+      country: trimmedCountry,
+      isMobilePresent: nextIsMobilePresent
     });
   };
 
@@ -1049,20 +1126,17 @@ export default function App() {
     setPeopleFetchStatus("Submitting request...");
     setIsPeopleFetchSubmitting(true);
 
-    // Parse selectedSkillset and selectedRegion as numbers (Long)
+    // Parse selectedSkillset as number (Long)
     const skillId = selectedSkillset ? Number(selectedSkillset) : null;
-    const regionId = selectedRegion ? Number(selectedRegion) : null;
-    // Only send if both are valid numbers
-    if (!skillId || isNaN(skillId) || !regionId || isNaN(regionId)) {
+    if (!skillId || isNaN(skillId)) {
       setPeopleFetchStatusType("error");
-      setPeopleFetchStatus("Please select both a valid region and skill.");
+      setPeopleFetchStatus("Please select a valid skill.");
       setIsPeopleFetchSubmitting(false);
       return;
     }
 
     const requestBody = {
-      skillId: skillId,
-      regionIds: [regionId]
+      skillId: skillId
     };
 
     try {
@@ -1093,6 +1167,50 @@ export default function App() {
   const handleOpenSettingsPage = () => {
     setActivePage("settings");
     void handleDisplayPeopleClick();
+  };
+
+  const handlePersonStatusChange = async (personId: number, statusValue: string) => {
+    const normalizedStatusValue = statusValue.trim();
+    const parsedStatusId =
+      normalizedStatusValue.length > 0 && Number.isFinite(Number(normalizedStatusValue))
+        ? Math.trunc(Number(normalizedStatusValue))
+        : null;
+
+    if (!Number.isFinite(personId) || parsedStatusId === null) {
+      return;
+    }
+
+    const previousStatusValue = selectedStatusByPersonId[personId] ?? "";
+    setSelectedStatusByPersonId((prev) => ({
+      ...prev,
+      [personId]: String(parsedStatusId)
+    }));
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/v1/people/updatePersonMsgStatus/${encodeURIComponent(String(personId))}/${encodeURIComponent(String(parsedStatusId))}`,
+        {
+          method: "PUT",
+          headers: {
+            Accept: "application/json"
+          }
+        }
+      );
+
+      const payload = await getResponsePayload(response);
+      if (!response.ok) {
+        throw new Error(formatPayload(payload) || `Request failed with status ${response.status}`);
+      }
+    } catch (error) {
+      setSelectedStatusByPersonId((prev) => ({
+        ...prev,
+        [personId]: previousStatusValue
+      }));
+      setPeopleEnrichStatusType("error");
+      setPeopleEnrichStatus(
+        error instanceof Error ? error.message : "Failed to update person message status."
+      );
+    }
   };
 
   const handleInitiateMessagingClick = async () => {
@@ -1163,12 +1281,34 @@ export default function App() {
       return;
     }
 
-    const persons = selectedPeople.map((person) => ({
-      personId: String(person.personId ?? ""),
-      mobile: person.mobile,
-      linkedin: person.linkedin,
-      titleId: person.titleId ? Number(person.titleId) : null
-    }));
+    const persons = selectedPeople.map((person) => {
+      const numericPersonId =
+        typeof person.personId === "number"
+          ? person.personId
+          : typeof person.personId === "string"
+            ? Number(person.personId)
+            : NaN;
+      const normalizedPersonId = Number.isFinite(numericPersonId) ? Math.trunc(numericPersonId) : null;
+
+      const selectedStatusValue =
+        normalizedPersonId !== null ? selectedStatusByPersonId[normalizedPersonId] : undefined;
+      const fallbackStatusValue =
+        person.personMsgStatusId !== null ? String(person.personMsgStatusId) : "";
+      const effectiveStatusValue = (selectedStatusValue ?? fallbackStatusValue).trim();
+      const parsedStatusValue =
+        effectiveStatusValue.length > 0 && Number.isFinite(Number(effectiveStatusValue))
+          ? Math.trunc(Number(effectiveStatusValue))
+          : null;
+
+      return {
+        personId: String(person.personId ?? ""),
+        firstName: person.firstName,
+        mobile: person.mobile,
+        linkedin: person.linkedin,
+        titleId: person.titleId ? Number(person.titleId) : null,
+        personMsgStatusId: parsedStatusValue
+      };
+    });
 
     setIsPeopleEnrichSubmitting(true);
     setPeopleEnrichStatusType("sending");
@@ -1309,8 +1449,8 @@ export default function App() {
                           </colgroup>
                           <thead>
                             <tr className="border-b-[0.25px] border-slate-200 bg-[#f1f5f9] text-slate-700">
-                              <th className="px-2 py-2 font-medium">Domain</th>
-                              <th className="px-2 py-2 font-medium">
+                              <th className="px-2 py-2 font-bold">Domain</th>
+                              <th className="px-2 py-2 font-bold">
                                 <div className="flex items-center justify-between gap-2">
                                   <span>Status</span>
                                   <button
@@ -1479,24 +1619,6 @@ export default function App() {
                   <div className="h-full rounded-lg border-[0.25px] border-slate-200 bg-white grid grid-rows-[10%_90%]">
                       <div className="flex items-center gap-3 border-b-[0.25px] border-slate-200 px-4">
                         <label className="text-xs text-slate-700">
-                          Region
-                          <select
-                            value={selectedRegion}
-                            onChange={(event) => setSelectedRegion(event.target.value)}
-                            className="ml-2 rounded border border-slate-300 px-2 py-1 text-xs text-slate-900 focus:border-[#e8471b] focus:outline-none"
-                          >
-                            <option value="" disabled>
-                              {isPeopleInitLoading ? "Loading regions..." : "Select Region"}
-                            </option>
-                            {peopleRegions.map((region) => (
-                              <option key={region.id} value={String(region.id)}>
-                                {region.regionName}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-
-                        <label className="text-xs text-slate-700">
                           Skills
                           <select
                             value={selectedSkillset}
@@ -1575,7 +1697,43 @@ export default function App() {
 
                               <div className="ml-auto flex items-center gap-2">
                                 <div className="inline-flex items-center gap-2 rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-                                  <label className="flex items-center gap-1">
+                                  <label className="flex items-center gap-1 text-xs font-normal text-slate-700">
+                                    <span>Status</span>
+                                    <select
+                                      value={statusFilter}
+                                      onChange={(event) => setStatusFilter(event.target.value)}
+                                      className="w-28 rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-900 focus:border-[#e8471b] focus:outline-none"
+                                    >
+                                      <option value="">Select</option>
+                                      {peopleMsgStatuses.map((status) => (
+                                        <option key={status.value} value={status.value}>
+                                          {status.label}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                  <label className="flex items-center gap-1 text-xs font-normal text-slate-700">
+                                    <span>Country</span>
+                                    <input
+                                      type="text"
+                                      value={countryFilter}
+                                      onChange={(event) => setCountryFilter(event.target.value)}
+                                      className="w-24 rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-900 focus:border-[#e8471b] focus:outline-none"
+                                    />
+                                  </label>
+                                  <label className="flex items-center gap-1 text-xs font-normal text-slate-700">
+                                    <span>Is Mobile Present</span>
+                                    <select
+                                      value={isMobilePresentFilter}
+                                      onChange={(event) => setIsMobilePresentFilter(event.target.value)}
+                                      className="w-20 rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-900 focus:border-[#e8471b] focus:outline-none"
+                                    >
+                                      <option value="select">select</option>
+                                      <option value="yes">yes</option>
+                                      <option value="no">no</option>
+                                    </select>
+                                  </label>
+                                  <label className="flex items-center gap-1 text-xs font-normal text-slate-700">
                                     <span>Whatsapp Msg Count</span>
                                     <input
                                       type="text"
@@ -1584,7 +1742,7 @@ export default function App() {
                                       className="w-20 rounded border border-slate-300 bg-white px-1.5 py-1 text-xs text-slate-900 focus:border-[#e8471b] focus:outline-none"
                                     />
                                   </label>
-                                  <label className="flex items-center gap-1">
+                                  <label className="flex items-center gap-1 text-xs font-normal text-slate-700">
                                     <span>Linkedin Msg Count</span>
                                     <input
                                       type="text"
@@ -1605,7 +1763,7 @@ export default function App() {
                                 </div>
 
                                 <div className="inline-flex items-center gap-2 rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-                                  <label className="flex items-center gap-1">
+                                  <label className="flex items-center gap-1 text-xs font-normal text-slate-700">
                                     <span>Rows</span>
                                     <select
                                       value={peopleRowsPerPage}
@@ -1620,7 +1778,7 @@ export default function App() {
                                       <option value={50}>50</option>
                                     </select>
                                   </label>
-                                  <span className="rounded border border-slate-300 bg-white px-2 py-1 font-medium text-slate-700">
+                                  <span className="rounded border border-slate-300 bg-white px-2 py-1 text-xs font-normal text-slate-700">
                                     Page {safeCurrentPeoplePage} / {totalPeoplePages}
                                   </span>
                                   <button
@@ -1681,19 +1839,44 @@ export default function App() {
                             <table className="w-full border-collapse text-left text-xs">
                               <thead>
                                 <tr className="border-b border-slate-200 bg-slate-50 text-slate-700">
-                                  <th className="px-2 py-2 w-8"></th>
-                                  <th className="px-2 py-2 font-medium">ApolloId</th>
-                                  <th className="px-2 py-2 font-medium">First Name</th>
-                                  <th className="px-2 py-2 font-medium">Last Name</th>
-                                  <th className="px-2 py-2 font-medium">Title</th>                                  
-                                  <th className="px-2 py-2 font-medium">Mobile</th>
-                                  <th className="px-2 py-2 font-medium">Email</th>
-                                  <th className="px-2 py-2 font-medium">Linkedin</th>
-                                  <th className="px-2 py-2 font-medium text-center">LinkedinT</th>
-                                  <th className="px-2 py-2 font-medium text-center">WhatsAppT</th>
-                                  <th className="px-2 py-2 font-medium">Organization</th>
-                                  <th className="px-2 py-2 font-medium">Skill Name</th>
-                                  <th className="px-2 py-2 font-medium">Country</th>
+                                  <th className="px-2 py-2 w-8 font-bold">
+                                    <input
+                                      type="checkbox"
+                                      checked={isCurrentPageFullySelected}
+                                      disabled={currentPageSelectablePeopleIds.length === 0}
+                                      onChange={(event) => {
+                                        const shouldSelectAll = event.target.checked;
+                                        setSelectedPeopleIds((prev) => {
+                                          const next = new Set(prev);
+
+                                          if (shouldSelectAll) {
+                                            currentPageSelectablePeopleIds.forEach((personId) => {
+                                              next.add(personId);
+                                            });
+                                          } else {
+                                            currentPageSelectablePeopleIds.forEach((personId) => {
+                                              next.delete(personId);
+                                            });
+                                          }
+
+                                          return next;
+                                        });
+                                      }}
+                                    />
+                                  </th>
+                                  <th className="px-2 py-2 font-bold">Status</th>
+                                  <th className="px-2 py-2 font-bold">ApolloId</th>
+                                  <th className="px-2 py-2 font-bold">First Name</th>
+                                  <th className="px-2 py-2 font-bold">Last Name</th>
+                                  <th className="px-2 py-2 font-bold">Title</th>                                  
+                                  <th className="px-2 py-2 font-bold">Mobile</th>
+                                  <th className="px-2 py-2 font-bold">Email</th>
+                                  <th className="px-2 py-2 font-bold">Linkedin</th>
+                                  <th className="px-2 py-2 font-bold text-center">LinkedinT</th>
+                                  <th className="px-2 py-2 font-bold text-center">WhatsAppT</th>
+                                  <th className="px-2 py-2 font-bold">Organization</th>
+                                  <th className="px-2 py-2 font-bold">Skill Name</th>
+                                  <th className="px-2 py-2 font-bold">Country</th>
                                 </tr>
                               </thead>
                               <tbody>
@@ -1738,10 +1921,40 @@ export default function App() {
                                           }}
                                         />
                                       </td>
+                                      <td className="px-2 py-1 text-slate-700">
+                                        <select
+                                          value={
+                                            normalizedPersonId !== null
+                                              ? (selectedStatusByPersonId[normalizedPersonId] ??
+                                                (person.personMsgStatusId !== null
+                                                  ? String(person.personMsgStatusId)
+                                                  : ""))
+                                              : ""
+                                          }
+                                          disabled={normalizedPersonId === null || peopleMsgStatuses.length === 0}
+                                          onChange={(event) => {
+                                            if (normalizedPersonId === null) {
+                                              return;
+                                            }
+                                            const nextValue = event.target.value;
+                                            void handlePersonStatusChange(normalizedPersonId, nextValue);
+                                          }}
+                                          className="w-[140px] rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-900 focus:border-[#e8471b] focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-100"
+                                        >
+                                          <option value="" disabled>
+                                            {peopleMsgStatuses.length === 0 ? "No statuses" : "Select Status"}
+                                          </option>
+                                          {peopleMsgStatuses.map((status) => (
+                                            <option key={status.value} value={status.value}>
+                                              {status.label}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </td>
                                       <td className="px-2 py-1 text-slate-700">{String(person.apolloId ?? "")}</td>
                                       <td className="px-2 py-1 text-slate-700">{person.firstName}</td>
                                       <td className="px-2 py-1 text-slate-700">{person.lastName}</td>
-                                      <td className="px-2 py-1 text-slate-700">{person.title}</td>                                      
+                                      <td className="px-2 py-1 align-top text-slate-700 whitespace-normal break-words" title={person.title}>{person.title}</td>                                      
                                       <td className="px-2 py-1 text-slate-700">{person.mobile}</td>
                                       <td className="px-2 py-1 text-slate-700 break-all">{person.email}</td>
                                       <td className="px-2 py-1 text-slate-700">
@@ -1763,7 +1976,7 @@ export default function App() {
                                 })}
                                 {peopleList.length === 0 && (
                                   <tr>
-                                    <td colSpan={13} className="px-2 py-6 text-center text-slate-500">
+                                    <td colSpan={14} className="px-2 py-6 text-center text-slate-500">
                                       No records to display.
                                     </td>
                                   </tr>
