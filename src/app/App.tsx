@@ -1688,25 +1688,23 @@ export default function App() {
                           <thead>
                             <tr className="border-b-[0.25px] border-slate-200 bg-[#f1f5f9] text-slate-700">
                               <th className="px-2 py-2 font-bold">Domain</th>
-                              <th className="px-2 py-2 font-bold">
-                                <div className="flex items-center justify-between gap-2">
-                                  <span>Status</span>
-                                  <button
-                                    type="button"
-                                    className="text-3xl font-bold leading-none text-slate-900"
-                                    title="Add Server"
-                                    onClick={() => setIsAddServerOpen(true)}
-                                  >
-                                    +
-                                  </button>
-                                </div>
+                              <th className="px-2 py-2 font-bold">Status</th>
+                              <th className="px-2 py-2 font-bold text-center">
+                                <button
+                                  type="button"
+                                  className="text-3xl font-bold leading-none text-slate-900"
+                                  title="Add Server"
+                                  onClick={() => setIsAddServerOpen(true)}
+                                >
+                                  +
+                                </button>
                               </th>
                             </tr>
                           </thead>
                           <tbody>
                             {servers.length === 0 && (
                               <tr>
-                                <td colSpan={2} className="px-2 py-4 text-sm text-slate-500">
+                                <td colSpan={3} className="px-2 py-4 text-sm text-slate-500">
                                   No servers were returned by the API.
                                 </td>
                               </tr>
@@ -1714,7 +1712,7 @@ export default function App() {
 
                             {servers.length > 0 && filteredServers.length === 0 && (
                               <tr>
-                                <td colSpan={2} className="px-2 py-4 text-sm text-slate-500">
+                                <td colSpan={3} className="px-2 py-4 text-sm text-slate-500">
                                   No matching domains found.
                                 </td>
                               </tr>
