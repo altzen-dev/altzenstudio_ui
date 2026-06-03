@@ -769,6 +769,64 @@ export default function App() {
     }
   };
 
+  const handleDeleteServer = async (server: ServerRow, rowKey: string) => {
+    setSelectedRowKey(rowKey);
+
+    if (server.serverConfigId === null) {
+      setActionsByRow((current) => ({
+        ...current,
+        [rowKey]: {
+          status: "error",
+          message: "serverId is missing for this row."
+        }
+      }));
+      return;
+    }
+
+    setActionsByRow((current) => ({
+      ...current,
+      [rowKey]: {
+        status: "sending",
+        message: "Deleting server..."
+      }
+    }));
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/v1/servers/${encodeURIComponent(String(server.serverConfigId))}`,
+        {
+          method: "DELETE",
+          headers: {
+            Accept: "application/json"
+          }
+        }
+      );
+
+      const payload = await getResponsePayload(response);
+      if (!response.ok) {
+        throw new Error(formatPayload(payload) || `Request failed with status ${response.status}`);
+      }
+
+      setActionsByRow((current) => ({
+        ...current,
+        [rowKey]: {
+          status: "success",
+          message: formatPayload(payload)
+        }
+      }));
+
+      await fetchServers();
+    } catch (error) {
+      setActionsByRow((current) => ({
+        ...current,
+        [rowKey]: {
+          status: "error",
+          message: error instanceof Error ? error.message : "Failed to delete server."
+        }
+      }));
+    }
+  };
+
   const handleHanaBackup = async () => {
     if (!selectedRowKey || !selectedServer) {
       setBackupMenuError("OOPS You have not selected any server yet");
@@ -1623,8 +1681,9 @@ export default function App() {
                       <div>
                         <table className="w-full table-fixed border-collapse text-left text-sm">
                           <colgroup>
-                            <col className="w-[55%]" />
-                            <col className="w-[45%]" />
+                            <col className="w-[50%]" />
+                            <col className="w-[40%]" />
+                            <col className="w-[10%]" />
                           </colgroup>
                           <thead>
                             <tr className="border-b-[0.25px] border-slate-200 bg-[#f1f5f9] text-slate-700">
@@ -1713,6 +1772,19 @@ export default function App() {
                                           : action.status === "success"
                                             ? "Success"
                                             : "Ready"}
+                                    </td>
+                                    <td className="px-2 py-2 align-top text-center text-black">
+                                      <button
+                                        type="button"
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          void handleDeleteServer(server, rowKey);
+                                        }}
+                                        className="inline-flex h-7 w-7 items-center justify-center rounded bg-white text-base font-semibold leading-none text-slate-700 hover:bg-slate-100 hover:text-[#e8471b] focus:outline-none focus:border-transparent focus:ring-0"
+                                        title="Delete Server"
+                                      >
+                                        -
+                                      </button>
                                     </td>
                                   </tr>
                                 );
