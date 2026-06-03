@@ -1521,7 +1521,7 @@ export default function App() {
           <h1 className="pointer-events-none absolute left-1/2 -translate-x-1/2 text-[40px] font-semibold text-slate-900 leading-none">
             Altzen Cockpit
           </h1>
-          <div className="absolute right-4 top-2 flex items-center gap-3 text-sm text-slate-700">
+          <div className="absolute right-4 top-1/2 flex -translate-y-1/2 items-center gap-3 text-sm text-slate-700">
             <span className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-300 bg-slate-100 text-slate-600">
               <svg
                 aria-hidden="true"
