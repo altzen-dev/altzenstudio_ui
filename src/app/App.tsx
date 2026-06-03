@@ -5,6 +5,8 @@ import { API_BASE_URL } from "./config";
 declare global {
   interface Window {
     getAccessToken?: () => Promise<string | null>;
+    getUserName?: () => string | null;
+    logout?: () => Promise<void>;
   }
 }
 
@@ -182,6 +184,39 @@ function normalizeServerRows(payload: unknown): ServerRow[] {
 
     return accumulator;
   }, []);
+}
+
+function normalizeServerDetailForm(payload: unknown): AddServerFormState {
+  const parsed = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+  const data =
+    parsed.data && typeof parsed.data === "object" ? (parsed.data as Record<string, unknown>) : parsed;
+
+  const getValue = (...candidates: unknown[]) => {
+    for (const candidate of candidates) {
+      if (typeof candidate === "string") {
+        return candidate;
+      }
+      if (typeof candidate === "number") {
+        return String(candidate);
+      }
+    }
+    return "";
+  };
+
+  const isDeletedCandidate =
+    data.isDeleted ?? data.is_deleted ?? data.deleted ?? data.softDeleted ?? data.soft_deleted;
+
+  return {
+    serverIp: getValue(data.serverIP, data.serverIp, data.ipAddress, data.ip, data.address),
+    domainName: getValue(data.domainName, data.domain, data.host, data.hostname),
+    rootUsername: getValue(data.rootUserName, data.rootUsername, data.rootUser),
+    rootUserPassword: getValue(data.password, data.rootUserPassword, data.rootPassword),
+    hanaDbUsername: getValue(data.hanaUserName, data.hanaDbUsername, data.hanaUsername),
+    hanaDbPassword: getValue(data.hanaPassword, data.hanaDbPassword),
+    hanaPort: getValue(data.hanaPort, data.port),
+    hanaBackupPath: getValue(data.hanaBackupPath, data.backupPath),
+    isDeleted: typeof isDeletedCandidate === "boolean" ? isDeletedCandidate : false
+  };
 }
 
 async function getResponsePayload(response: Response): Promise<unknown> {
@@ -473,6 +508,7 @@ const initialAddServerForm: AddServerFormState = {
 };
 
 export default function App() {
+  const [userName, setUserName] = useState("User");
   const [servers, setServers] = useState<ServerRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -496,6 +532,13 @@ export default function App() {
   const [addServerForm, setAddServerForm] = useState<AddServerFormState>(initialAddServerForm);
   const [isAddServerSubmitting, setIsAddServerSubmitting] = useState(false);
   const [addServerSubmitError, setAddServerSubmitError] = useState("");
+  const [isEditServerOpen, setIsEditServerOpen] = useState(false);
+  const [editingServerId, setEditingServerId] = useState<string | number | null>(null);
+  const [editServerForm, setEditServerForm] = useState<AddServerFormState>(initialAddServerForm);
+  const [isEditServerLoading, setIsEditServerLoading] = useState(false);
+  const [isEditServerSubmitting, setIsEditServerSubmitting] = useState(false);
+  const [editServerError, setEditServerError] = useState("");
+  const [editServerSubmitError, setEditServerSubmitError] = useState("");
   const [peopleList, setPeopleList] = useState<PeopleRow[]>([]);
   const [isPeopleListLoading, setIsPeopleListLoading] = useState(false);
   const [peopleListError, setPeopleListError] = useState("");
@@ -581,6 +624,17 @@ export default function App() {
       sseByRowRef.current = {};
     };
   }, []);
+
+  useEffect(() => {
+    const resolvedName = window.getUserName?.();
+    if (resolvedName && resolvedName.trim().length > 0) {
+      setUserName(resolvedName.trim());
+    }
+  }, []);
+
+  const handleLogoutClick = () => {
+    void window.logout?.();
+  };
 
   const startSSELogging = (url: string, rowKey: string) => {
     const existing = sseByRowRef.current[rowKey];
@@ -870,15 +924,20 @@ export default function App() {
     event.preventDefault();
     setAddServerSubmitError("");
 
+    const toNullIfBlank = (value: string) => {
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : null;
+    };
+
     const mappedPayload = {
       serverIP: addServerForm.serverIp,
       domainName: addServerForm.domainName,
-      rootUserName: addServerForm.rootUsername,
+      rootUserName: toNullIfBlank(addServerForm.rootUsername),
       password: addServerForm.rootUserPassword,
-      hanaUserName: addServerForm.hanaDbUsername,
+      hanaUserName: toNullIfBlank(addServerForm.hanaDbUsername),
       hanaPassword: addServerForm.hanaDbPassword,
-      hanaPort: addServerForm.hanaPort,
-      hanaBackupPath: addServerForm.hanaBackupPath,
+      hanaPort: toNullIfBlank(addServerForm.hanaPort),
+      hanaBackupPath: toNullIfBlank(addServerForm.hanaBackupPath),
       isDeleted: addServerForm.isDeleted
     };
 
@@ -906,6 +965,109 @@ export default function App() {
       setAddServerSubmitError(message);
     } finally {
       setIsAddServerSubmitting(false);
+    }
+  };
+
+  const handleEditServerFieldChange = (field: keyof AddServerFormState, value: string) => {
+    setEditServerForm((current) => ({
+      ...current,
+      [field]: value
+    }));
+  };
+
+  const handleOpenEditServerModal = async (server: ServerRow, rowKey: string) => {
+    setSelectedRowKey(rowKey);
+    setSelectedServer(server);
+
+    if (server.serverConfigId === null) {
+      setBackupMenuError("Server ID is missing for this row.");
+      return;
+    }
+
+    setEditingServerId(server.serverConfigId);
+    setIsEditServerOpen(true);
+    setIsEditServerLoading(true);
+    setEditServerError("");
+    setEditServerSubmitError("");
+
+    try {
+      const response = await fetch(
+        `${API_BASE_URL}/api/v1/servers/${encodeURIComponent(String(server.serverConfigId))}`,
+        {
+          method: "GET",
+          headers: {
+            Accept: "application/json"
+          }
+        }
+      );
+
+      const payload = await getResponsePayload(response);
+      if (!response.ok) {
+        throw new Error(formatPayload(payload) || `Request failed with status ${response.status}`);
+      }
+
+      setEditServerForm(normalizeServerDetailForm(payload));
+    } catch (error) {
+      setEditServerError(error instanceof Error ? error.message : "Failed to load server details.");
+      setEditServerForm(initialAddServerForm);
+    } finally {
+      setIsEditServerLoading(false);
+    }
+  };
+
+  const handleEditServerSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setEditServerSubmitError("");
+
+    if (editingServerId === null) {
+      setEditServerSubmitError("Server ID is missing.");
+      return;
+    }
+
+    const toNullIfBlank = (value: string) => {
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : null;
+    };
+
+    const mappedPayload = {
+      serverIP: editServerForm.serverIp,
+      domainName: editServerForm.domainName,
+      rootUserName: toNullIfBlank(editServerForm.rootUsername),
+      password: editServerForm.rootUserPassword,
+      hanaUserName: toNullIfBlank(editServerForm.hanaDbUsername),
+      hanaPassword: editServerForm.hanaDbPassword,
+      hanaPort: toNullIfBlank(editServerForm.hanaPort),
+      hanaBackupPath: toNullIfBlank(editServerForm.hanaBackupPath),
+      isDeleted: editServerForm.isDeleted
+    };
+
+    try {
+      setIsEditServerSubmitting(true);
+      const response = await fetch(
+        `${API_BASE_URL}/api/v1/servers/${encodeURIComponent(String(editingServerId))}`,
+        {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json"
+          },
+          body: JSON.stringify(mappedPayload)
+        }
+      );
+
+      const payload = await getResponsePayload(response);
+      if (!response.ok) {
+        throw new Error(formatPayload(payload) || `Request failed with status ${response.status}`);
+      }
+
+      setIsEditServerOpen(false);
+      setEditingServerId(null);
+      setEditServerForm(initialAddServerForm);
+      await fetchServers();
+    } catch (error) {
+      setEditServerSubmitError(error instanceof Error ? error.message : "Failed to update server.");
+    } finally {
+      setIsEditServerSubmitting(false);
     }
   };
 
@@ -1350,12 +1512,37 @@ export default function App() {
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-white text-slate-900">
       <header className="sticky top-0 z-10 border-b-[0.25px] border-slate-200 bg-white/95 backdrop-blur">
-        <div className="flex w-full items-center gap-4 py-4">
+        <div className="relative flex w-full items-center gap-4 py-4 pr-4">
           <img
             src="/icons/altzenLogo.webp"
             alt="Company logo"
             className="h-10 w-auto object-contain sm:h-11 ml-3"
           />
+          <div className="absolute right-4 top-2 flex items-center gap-3 text-sm text-slate-700">
+            <span className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-300 bg-slate-100 text-slate-600">
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                className="h-3.5 w-3.5"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <circle cx="12" cy="8" r="3" />
+                <path d="M5 19c0-3 3-5 7-5s7 2 7 5" />
+              </svg>
+            </span>
+            <span className="max-w-[180px] truncate font-medium" title={userName}>
+              {userName}
+            </span>
+            <button
+              type="button"
+              onClick={handleLogoutClick}
+              className="rounded border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+            >
+              Logout
+            </button>
+          </div>
         </div>
       </header>
 
@@ -1504,7 +1691,6 @@ export default function App() {
                                       setSelectedServer(server);
                                       setBackupMenuError("");
                                     }}
-                                    onDoubleClick={() => handleServerAction(server, rowKey)}
                                     className={`cursor-pointer border-b-[0.25px] border-slate-200 ${
                                       isGreen
                                         ? "bg-green-500/10 text-black"
@@ -1512,10 +1698,20 @@ export default function App() {
                                           ? "bg-slate-200 text-black"
                                           : "bg-transparent hover:bg-slate-800/60 text-black"
                                     }`}
-                                    title="Double-click anywhere on the row to submit"
+                                    title="Double-click on Domain to edit server"
                                   >
                                     <td className="break-words px-2 py-2 align-top text-black">
-                                      {server.domainName}
+                                      <button
+                                        type="button"
+                                        onDoubleClick={(event) => {
+                                          event.stopPropagation();
+                                          void handleOpenEditServerModal(server, rowKey);
+                                        }}
+                                        className="max-w-full truncate text-left text-sm hover:text-[#e8471b]"
+                                        title="Double-click to edit server"
+                                      >
+                                        {server.domainName}
+                                      </button>
                                     </td>
                                     <td className="break-words px-2 py-2 align-top text-black">
                                       {action.status === "sending"
@@ -2141,19 +2337,9 @@ export default function App() {
 
               <div className="grid gap-4 sm:grid-cols-2">
                 <label className="flex flex-col gap-1 text-sm text-slate-700">
-                  <span>Server IP</span>
+                  <span>Domain name *</span>
                   <input
-                    type="text"
-                    value={addServerForm.serverIp}
-                    onChange={(event) => handleAddServerFieldChange("serverIp", event.target.value)}
-                    required
-                    className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-[#e8471b]"
-                  />
-                </label>
-
-                <label className="flex flex-col gap-1 text-sm text-slate-700">
-                  <span>Domain name</span>
-                  <input
+                    name="domainName"
                     type="text"
                     value={addServerForm.domainName}
                     onChange={(event) => handleAddServerFieldChange("domainName", event.target.value)}
@@ -2163,18 +2349,29 @@ export default function App() {
                 </label>
 
                 <label className="flex flex-col gap-1 text-sm text-slate-700">
-                  <span>Root Username</span>
+                  <span>Server IP *</span>
                   <input
+                    name="serverIp"
                     type="text"
-                    value={addServerForm.rootUsername}
-                    onChange={(event) => handleAddServerFieldChange("rootUsername", event.target.value)}
+                    value={addServerForm.serverIp}
+                    onChange={(event) => handleAddServerFieldChange("serverIp", event.target.value)}
                     required
                     className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-[#e8471b]"
                   />
                 </label>
 
                 <label className="flex flex-col gap-1 text-sm text-slate-700">
-                  <span>Root User Password</span>
+                  <span>Root Username (Optional)</span>
+                  <input
+                    type="text"
+                    value={addServerForm.rootUsername}
+                    onChange={(event) => handleAddServerFieldChange("rootUsername", event.target.value)}
+                    className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-[#e8471b]"
+                  />
+                </label>
+
+                <label className="flex flex-col gap-1 text-sm text-slate-700">
+                  <span>Root User Password *</span>
                   <input
                     type="password"
                     value={addServerForm.rootUserPassword}
@@ -2185,18 +2382,17 @@ export default function App() {
                 </label>
 
                 <label className="flex flex-col gap-1 text-sm text-slate-700">
-                  <span>HANA DB Username</span>
+                  <span>HANA DB Username (Optional)</span>
                   <input
                     type="text"
                     value={addServerForm.hanaDbUsername}
                     onChange={(event) => handleAddServerFieldChange("hanaDbUsername", event.target.value)}
-                    required
                     className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-[#e8471b]"
                   />
                 </label>
 
                 <label className="flex flex-col gap-1 text-sm text-slate-700">
-                  <span>HANA DB Password</span>
+                  <span>HANA DB Password *</span>
                   <input
                     type="password"
                     value={addServerForm.hanaDbPassword}
@@ -2207,23 +2403,21 @@ export default function App() {
                 </label>
 
                 <label className="flex flex-col gap-1 text-sm text-slate-700">
-                  <span>HANA Port</span>
+                  <span>HANA Port (Optional)</span>
                   <input
                     type="text"
                     value={addServerForm.hanaPort}
                     onChange={(event) => handleAddServerFieldChange("hanaPort", event.target.value)}
-                    required
                     className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-[#e8471b]"
                   />
                 </label>
 
                 <label className="flex flex-col gap-1 text-sm text-slate-700 sm:col-span-2">
-                  <span>HANA Backup Path</span>
+                  <span>HANA Backup Path (Optional)</span>
                   <input
                     type="text"
                     value={addServerForm.hanaBackupPath}
                     onChange={(event) => handleAddServerFieldChange("hanaBackupPath", event.target.value)}
-                    required
                     className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-[#e8471b]"
                   />
                 </label>
@@ -2246,6 +2440,152 @@ export default function App() {
                   {isAddServerSubmitting ? "Submitting..." : "Submit"}
                 </button>
               </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {isEditServerOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
+          <div className="w-full max-w-2xl rounded-xl border border-slate-200 bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+              <h2 className="text-lg font-semibold text-slate-900">Edit Server</h2>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsEditServerOpen(false);
+                  setEditingServerId(null);
+                }}
+                className="rounded px-2 py-1 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+              >
+                Close
+              </button>
+            </div>
+
+            <form onSubmit={handleEditServerSubmit} className="px-6 py-5">
+              {isEditServerLoading ? (
+                <p className="text-sm text-slate-600">Loading server details...</p>
+              ) : (
+                <>
+                  {editServerError && (
+                    <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                      {editServerError}
+                    </div>
+                  )}
+                  {editServerSubmitError && (
+                    <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                      {editServerSubmitError}
+                    </div>
+                  )}
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="flex flex-col gap-1 text-sm text-slate-700">
+                      <span>Domain name *</span>
+                      <input
+                        type="text"
+                        value={editServerForm.domainName}
+                        onChange={(event) => handleEditServerFieldChange("domainName", event.target.value)}
+                        required
+                        className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-[#e8471b]"
+                      />
+                    </label>
+
+                    <label className="flex flex-col gap-1 text-sm text-slate-700">
+                      <span>Server IP *</span>
+                      <input
+                        type="text"
+                        value={editServerForm.serverIp}
+                        onChange={(event) => handleEditServerFieldChange("serverIp", event.target.value)}
+                        required
+                        className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-[#e8471b]"
+                      />
+                    </label>
+
+                    <label className="flex flex-col gap-1 text-sm text-slate-700">
+                      <span>Root Username (Optional)</span>
+                      <input
+                        type="text"
+                        value={editServerForm.rootUsername}
+                        onChange={(event) => handleEditServerFieldChange("rootUsername", event.target.value)}
+                        className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-[#e8471b]"
+                      />
+                    </label>
+
+                    <label className="flex flex-col gap-1 text-sm text-slate-700">
+                      <span>Root User Password *</span>
+                      <input
+                        type="text"
+                        value={editServerForm.rootUserPassword}
+                        onChange={(event) => handleEditServerFieldChange("rootUserPassword", event.target.value)}
+                        required
+                        className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-[#e8471b]"
+                      />
+                    </label>
+
+                    <label className="flex flex-col gap-1 text-sm text-slate-700">
+                      <span>HANA DB Username (Optional)</span>
+                      <input
+                        type="text"
+                        value={editServerForm.hanaDbUsername}
+                        onChange={(event) => handleEditServerFieldChange("hanaDbUsername", event.target.value)}
+                        className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-[#e8471b]"
+                      />
+                    </label>
+
+                    <label className="flex flex-col gap-1 text-sm text-slate-700">
+                      <span>HANA DB Password *</span>
+                      <input
+                        type="text"
+                        value={editServerForm.hanaDbPassword}
+                        onChange={(event) => handleEditServerFieldChange("hanaDbPassword", event.target.value)}
+                        required
+                        className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-[#e8471b]"
+                      />
+                    </label>
+
+                    <label className="flex flex-col gap-1 text-sm text-slate-700">
+                      <span>HANA Port (Optional)</span>
+                      <input
+                        type="text"
+                        value={editServerForm.hanaPort}
+                        onChange={(event) => handleEditServerFieldChange("hanaPort", event.target.value)}
+                        className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-[#e8471b]"
+                      />
+                    </label>
+
+                    <label className="flex flex-col gap-1 text-sm text-slate-700 sm:col-span-2">
+                      <span>HANA Backup Path (Optional)</span>
+                      <input
+                        type="text"
+                        value={editServerForm.hanaBackupPath}
+                        onChange={(event) => handleEditServerFieldChange("hanaBackupPath", event.target.value)}
+                        className="rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 outline-none focus:border-[#e8471b]"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="mt-6 flex justify-end gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsEditServerOpen(false);
+                        setEditingServerId(null);
+                      }}
+                      disabled={isEditServerSubmitting}
+                      className="rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isEditServerSubmitting || Boolean(editServerError)}
+                      className="rounded-md bg-[#e8471b] px-4 py-2 text-sm font-semibold text-white hover:bg-[#c73a14] disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {isEditServerSubmitting ? "Saving..." : "Save"}
+                    </button>
+                  </div>
+                </>
+              )}
             </form>
           </div>
         </div>

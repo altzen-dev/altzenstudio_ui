@@ -9,6 +9,8 @@ import "./styles/index.css";
 declare global {
   interface Window {
     getAccessToken?: () => Promise<string | null>;
+    getUserName?: () => string | null;
+    logout?: () => Promise<void>;
   }
 }
 
@@ -58,6 +60,23 @@ function installAuthenticatedFetch(authClient: Keycloak) {
     }
 
     return authClient.token ?? null;
+  };
+
+  window.getUserName = () => {
+    const parsed = authClient.tokenParsed as { preferred_username?: string; name?: string } | undefined;
+    const preferredUserName = parsed?.preferred_username?.trim();
+    if (preferredUserName) {
+      return preferredUserName;
+    }
+
+    const fullName = parsed?.name?.trim();
+    return fullName && fullName.length > 0 ? fullName : null;
+  };
+
+  window.logout = async () => {
+    await authClient.logout({
+      redirectUri: window.location.origin
+    });
   };
 
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
