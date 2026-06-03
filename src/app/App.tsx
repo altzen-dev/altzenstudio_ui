@@ -1516,8 +1516,11 @@ export default function App() {
           <img
             src="/icons/altzenLogo.webp"
             alt="Company logo"
-            className="h-10 w-auto object-contain sm:h-11 ml-3"
+            className="h-10 w-auto object-contain sm:h-11 ml-[17px]"
           />
+          <h1 className="pointer-events-none absolute left-1/2 -translate-x-1/2 text-[40px] font-semibold text-slate-900 leading-none">
+            Altzen Cockpit
+          </h1>
           <div className="absolute right-4 top-2 flex items-center gap-3 text-sm text-slate-700">
             <span className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-300 bg-slate-100 text-slate-600">
               <svg
@@ -1547,7 +1550,7 @@ export default function App() {
       </header>
 
       <main className="min-h-0 flex-1 w-full overflow-hidden">
-        <div className="grid h-full grid-cols-[5%_95%] items-stretch">
+        <div className="grid h-full grid-cols-[calc(5%-20px)_calc(95%+20px)] items-stretch">
           {/* Left Sidebar - 5% (Fixed Navigation) */}
           <div className="h-full border-r-[0.25px] border-slate-200 flex flex-col items-center pt-3 gap-4 bg-slate-50">
             <button
@@ -1562,17 +1565,6 @@ export default function App() {
               />
             </button>
             <div className="flex flex-col gap-2 w-full items-center">
-              <button
-                onClick={() => setActivePage("dashboard")}
-                className={`w-10 h-10 rounded flex items-center justify-center transition-colors ${
-                  activePage === "dashboard"
-                    ? "bg-[#e8471b] text-white"
-                    : "hover:bg-slate-200 text-slate-600"
-                }`}
-                title="Dashboard"
-              >
-                📊
-              </button>
               <button
                 onClick={handleOpenSettingsPage}
                 className={`w-10 h-10 rounded flex items-center justify-center transition-colors ${
