@@ -635,6 +635,26 @@ export default function App() {
     }
   }, []);
 
+  useEffect(() => {
+    if (openServerMenuRowKey === null) {
+      return;
+    }
+
+    const handleDocumentMouseDown = (event: MouseEvent) => {
+      const target = event.target as Element | null;
+      if (target?.closest('[data-server-actions-root="true"]')) {
+        return;
+      }
+
+      setOpenServerMenuRowKey(null);
+    };
+
+    document.addEventListener("mousedown", handleDocumentMouseDown);
+    return () => {
+      document.removeEventListener("mousedown", handleDocumentMouseDown);
+    };
+  }, [openServerMenuRowKey]);
+
   const handleLogoutClick = () => {
     void window.logout?.();
   };
@@ -1776,7 +1796,10 @@ export default function App() {
                                             ? "Success"
                                             : "Ready"}
                                     </td>
-                                    <td className="relative px-2 py-2 align-top text-center text-black">
+                                    <td
+                                      className="relative px-2 py-2 align-top text-center text-black"
+                                      data-server-actions-root="true"
+                                    >
                                       <button
                                         type="button"
                                         onClick={(event) => {
