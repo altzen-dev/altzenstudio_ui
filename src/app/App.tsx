@@ -527,7 +527,6 @@ export default function App() {
   const [isPeopleFetchSubmitting, setIsPeopleFetchSubmitting] = useState(false);
   const [peopleFetchStatus, setPeopleFetchStatus] = useState("");
   const [peopleFetchStatusType, setPeopleFetchStatusType] = useState<ActionStatus>("idle");
-  const [isSapBasisMenuOpen, setIsSapBasisMenuOpen] = useState(false);
   const [isAddServerOpen, setIsAddServerOpen] = useState(false);
   const [addServerForm, setAddServerForm] = useState<AddServerFormState>(initialAddServerForm);
   const [isAddServerSubmitting, setIsAddServerSubmitting] = useState(false);
@@ -570,6 +569,10 @@ export default function App() {
   const [pushMessageOptions, setPushMessageOptions] = useState<PushMessageOption[]>([]);
   const [isPushMessagesLoading, setIsPushMessagesLoading] = useState(false);
   const [pushMessagesError, setPushMessagesError] = useState("");
+  const [openServerMenuRowKey, setOpenServerMenuRowKey] = useState<string | null>(null);
+  const [isDeleteServerConfirmOpen, setIsDeleteServerConfirmOpen] = useState(false);
+  const [pendingDeleteServer, setPendingDeleteServer] = useState<ServerRow | null>(null);
+  const [pendingDeleteRowKey, setPendingDeleteRowKey] = useState<string | null>(null);
   const sseByRowRef = useRef<Record<string, AbortController>>({});
 
   useEffect(() => {
@@ -827,16 +830,34 @@ export default function App() {
     }
   };
 
-  const handleHanaBackup = async () => {
-    if (!selectedRowKey || !selectedServer) {
-      setBackupMenuError("OOPS You have not selected any server yet");
+  const handleOpenDeleteServerConfirm = (server: ServerRow, rowKey: string) => {
+    setOpenServerMenuRowKey(null);
+    setPendingDeleteServer(server);
+    setPendingDeleteRowKey(rowKey);
+    setIsDeleteServerConfirmOpen(true);
+  };
+
+  const handleConfirmDeleteServer = async () => {
+    if (!pendingDeleteServer || !pendingDeleteRowKey) {
+      setIsDeleteServerConfirmOpen(false);
       return;
     }
 
-    if (selectedServer.serverConfigId === null) {
+    const server = pendingDeleteServer;
+    const rowKey = pendingDeleteRowKey;
+
+    setIsDeleteServerConfirmOpen(false);
+    setPendingDeleteServer(null);
+    setPendingDeleteRowKey(null);
+
+    await handleDeleteServer(server, rowKey);
+  };
+
+  const handleHanaBackup = async (server: ServerRow, rowKey: string) => {
+    if (server.serverConfigId === null) {
       setActionsByRow((current) => ({
         ...current,
-        [selectedRowKey]: {
+        [rowKey]: {
           status: "error",
           message: "serverId is missing for this row."
         }
@@ -845,10 +866,8 @@ export default function App() {
     }
 
     setBackupMenuError("");
-    setIsSapBasisMenuOpen(false);
-
-    const rowKey = selectedRowKey;
-    const server = selectedServer;
+    setSelectedRowKey(rowKey);
+    setSelectedServer(server);
 
     setActionsByRow((current) => ({
       ...current,
@@ -858,15 +877,11 @@ export default function App() {
       }
     }));
 
-    
-
     try {
-      
       startSSELogging(`${API_BASE_URL}/api/v1/hbs/logs/stream/${server.serverConfigId}`, rowKey);
 
       const response = await fetch(
         `${API_BASE_URL}/api/v1/hbs/${encodeURIComponent(String(server.serverConfigId))}`,
-
         {
           method: "POST",
           headers: {
@@ -876,11 +891,8 @@ export default function App() {
       );
 
       const payload = await getResponsePayload(response);
-
       if (!response.ok) {
-        throw new Error(
-          formatPayload(payload) || `Request failed with status ${response.status}`
-        );
+        throw new Error(formatPayload(payload) || `Request failed with status ${response.status}`);
       }
 
       setActionsByRow((current) => ({
@@ -902,16 +914,11 @@ export default function App() {
     }
   };
 
-  const handleInstall = async () => {
-    if (!selectedRowKey || !selectedServer) {
-      setBackupMenuError("OOPS You have not selected any server yet");
-      return;
-    }
-
-    if (selectedServer.serverConfigId === null) {
+  const handleInstall = async (server: ServerRow, rowKey: string) => {
+    if (server.serverConfigId === null) {
       setActionsByRow((current) => ({
         ...current,
-        [selectedRowKey]: {
+        [rowKey]: {
           status: "error",
           message: "serverId is missing for this row."
         }
@@ -920,10 +927,8 @@ export default function App() {
     }
 
     setBackupMenuError("");
-    setIsSapBasisMenuOpen(false);
-
-    const rowKey = selectedRowKey;
-    const server = selectedServer;
+    setSelectedRowKey(rowKey);
+    setSelectedServer(server);
 
     setActionsByRow((current) => ({
       ...current,
@@ -934,11 +939,9 @@ export default function App() {
     }));
 
     try {
-
       startSSELogging(`${API_BASE_URL}/api/v1/his/logs/stream/${server.serverConfigId}`, rowKey);
       const response = await fetch(
         `${API_BASE_URL}/api/v1/his/${encodeURIComponent(String(server.serverConfigId))}`,
-
         {
           method: "POST",
           headers: {
@@ -1731,6 +1734,7 @@ export default function App() {
                                   typeof log === "string" && log.includes("Agent completed")
                                 );
                                 const isGreen = isSending || ((logsByRow[rowKey]?.length ?? 0) > 0 && !agentCompleted);
+                                const isServerMenuOpen = openServerMenuRowKey === rowKey;
 
                                 return (
                                   <tr
@@ -1739,6 +1743,7 @@ export default function App() {
                                       setSelectedRowKey(rowKey);
                                       setSelectedServer(server);
                                       setBackupMenuError("");
+                                      setOpenServerMenuRowKey(null);
                                     }}
                                     className={`cursor-pointer border-b-[0.25px] border-slate-200 ${
                                       isGreen
@@ -1771,18 +1776,75 @@ export default function App() {
                                             ? "Success"
                                             : "Ready"}
                                     </td>
-                                    <td className="px-2 py-2 align-top text-center text-black">
+                                    <td className="relative px-2 py-2 align-top text-center text-black">
                                       <button
                                         type="button"
                                         onClick={(event) => {
                                           event.stopPropagation();
-                                          void handleDeleteServer(server, rowKey);
+                                          setOpenServerMenuRowKey((current) =>
+                                            current === rowKey ? null : rowKey
+                                          );
                                         }}
                                         className="inline-flex h-7 w-7 items-center justify-center rounded bg-white text-base font-semibold leading-none text-slate-700 hover:bg-slate-100 hover:text-[#e8471b] focus:outline-none focus:border-transparent focus:ring-0"
-                                        title="Delete Server"
+                                        title="Server actions"
+                                        aria-haspopup="menu"
+                                        aria-expanded={isServerMenuOpen}
                                       >
-                                        -
+                                        <svg
+                                          aria-hidden="true"
+                                          viewBox="0 0 24 24"
+                                          className="h-4 w-4"
+                                          fill="currentColor"
+                                        >
+                                          <circle cx="5" cy="12" r="1.5" />
+                                          <circle cx="12" cy="12" r="1.5" />
+                                          <circle cx="19" cy="12" r="1.5" />
+                                        </svg>
                                       </button>
+                                      {isServerMenuOpen && (
+                                        <div
+                                          className="absolute right-2 top-8 z-20 min-w-[120px] rounded border border-slate-200 bg-white py-1 shadow-md"
+                                          role="menu"
+                                          onClick={(event) => event.stopPropagation()}
+                                        >
+                                          <button
+                                            type="button"
+                                            className="block w-full px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-100"
+                                            role="menuitem"
+                                            onClick={(event) => {
+                                              event.stopPropagation();
+                                              setOpenServerMenuRowKey(null);
+                                              void handleHanaBackup(server, rowKey);
+                                            }}
+                                          >
+                                            Backup
+                                          </button>
+                                          <button
+                                            type="button"
+                                            className="block w-full px-3 py-1.5 text-left text-xs text-slate-700 hover:bg-slate-100"
+                                            role="menuitem"
+                                            onClick={(event) => {
+                                              event.stopPropagation();
+                                              setOpenServerMenuRowKey(null);
+                                              void handleInstall(server, rowKey);
+                                            }}
+                                          >
+                                            Install
+                                          </button>
+                                          <div className="my-1 h-px bg-slate-200" />
+                                          <button
+                                            type="button"
+                                            className="block w-full px-3 py-1.5 text-left text-xs text-red-700 hover:bg-red-50"
+                                            role="menuitem"
+                                            onClick={(event) => {
+                                              event.stopPropagation();
+                                              handleOpenDeleteServerConfirm(server, rowKey);
+                                            }}
+                                          >
+                                            Delete
+                                          </button>
+                                        </div>
+                                      )}
                                     </td>
                                   </tr>
                                 );
@@ -1796,39 +1858,6 @@ export default function App() {
 
                 {/* Response panel column */}
                 <div className="flex h-full flex-col border-r-[0.25px] border-slate-200">
-                  {/* Menu bar */}
-                  <div className="flex gap-1 border-b-[0.25px] border-slate-200 bg-slate-100 px-1">
-                    <div
-                      className="relative"
-                      onMouseEnter={() => setIsSapBasisMenuOpen(true)}
-                      onMouseLeave={() => setIsSapBasisMenuOpen(false)}
-                    >
-                      <button className="whitespace-nowrap rounded px-3 py-1.5 text-xs font-medium text-black hover:bg-slate-200 focus:outline-none">
-                        SAP Basis
-                      </button>
-                      {isSapBasisMenuOpen && (
-                        <div className="absolute left-0 top-full z-20 min-w-[140px] border-[0.25px] border-slate-300 bg-slate-100 shadow-md">
-                        <button
-                          onClick={handleHanaBackup}
-                          className="block w-full px-3 py-2 text-left text-xs text-black hover:bg-slate-200"
-                        >
-                          HANA Backup
-                        </button>
-                        <button
-                          onClick={handleInstall}
-                          className="block w-full border-t-[0.25px] border-slate-300 px-3 py-2 text-left text-xs text-black hover:bg-slate-200"
-                        >
-                          Install
-                        </button>
-                        </div>
-                      )}
-                    </div>
-                    <div className="group relative">
-                      <button className="whitespace-nowrap rounded px-3 py-1.5 text-xs font-medium text-black hover:bg-slate-200 focus:outline-none">
-                        Actions
-                      </button>
-                    </div>
-                  </div>
                   {/* Grid content area */}
                   <div className="grid flex-1 min-h-0 grid-rows-[70%_30%]">
                     <div className="min-h-0 overflow-y-auto px-4 py-4">
@@ -2369,6 +2398,39 @@ export default function App() {
                 className="rounded bg-[#e8471b] px-4 py-2 text-sm font-semibold text-white hover:bg-[#c73a14] disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isPeopleEnrichSubmitting ? "Sending..." : "Send Messages"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isDeleteServerConfirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
+          <div className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-6 shadow-2xl">
+            <h3 className="text-base font-semibold text-slate-900">Delete Server</h3>
+            <p className="mt-3 text-sm text-slate-700">
+              Are you sure you want to delete this server?
+            </p>
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsDeleteServerConfirmOpen(false);
+                  setPendingDeleteServer(null);
+                  setPendingDeleteRowKey(null);
+                }}
+                className="rounded border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                No
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void handleConfirmDeleteServer();
+                }}
+                className="rounded bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700"
+              >
+                Yes
               </button>
             </div>
           </div>
