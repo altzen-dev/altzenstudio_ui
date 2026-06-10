@@ -1,5 +1,4 @@
-const HOST = "51.254.167.17";
-//const HOST = "localhost";
+const HOST = window.location.host;
 
-export const KEYCLOAK_URL = `http://${HOST}:8080`;
-export const API_BASE_URL = `http://${HOST}:8081`;
+export const KEYCLOAK_URL = `${window.location.protocol}//${HOST}`;
+export const API_BASE_URL = `${window.location.protocol}//${HOST}`;

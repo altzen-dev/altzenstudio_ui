@@ -108,34 +108,67 @@ function installAuthenticatedFetch(authClient: Keycloak) {
   };
 }
 
-const rootElement = document.getElementById("root");
+const rootElementNode = document.getElementById("root");
 
-if (!rootElement) {
+if (!rootElementNode) {
   throw new Error("Root element not found.");
 }
 
+const rootElement: HTMLElement = rootElementNode;
+
 ensureWebCryptoCompatibility();
 
+// True when the browser is returning from a Keycloak login redirect (has ?code= in URL).
+const isKeycloakCallback = new URLSearchParams(window.location.search).has("code");
+
+function showAuthError(message: string) {
+  rootElement.innerHTML = `
+    <div style="display:flex;height:100vh;align-items:center;justify-content:center;
+                font-family:sans-serif;flex-direction:column;gap:16px;color:#1e293b">
+      <p style="font-size:1rem;color:#b91c1c;margin:0">${message}</p>
+      <button
+        onclick="window.location.replace(window.location.origin)"
+        style="padding:8px 20px;border-radius:6px;background:#e8471b;color:#fff;
+               border:none;cursor:pointer;font-size:0.875rem;font-weight:600">
+        Try Again
+      </button>
+    </div>`;
+}
+
+// No `onLoad` — keycloak.init() still processes any ?code= callback in the URL,
+// but never auto-redirects. We drive login manually.
+// This avoids: (a) infinite loops from login-required, (b) blank pages from
+// check-sso iframe failures when running behind an nginx reverse proxy.
 keycloak
   .init({
-    onLoad: "login-required",
     checkLoginIframe: false,
-    pkceMethod: false,
+    pkceMethod: "S256",
     redirectUri: window.location.origin
   })
   .then((authenticated) => {
-    if (!authenticated) {
+    if (authenticated) {
+      installAuthenticatedFetch(keycloak);
+      createRoot(rootElement).render(
+        <Provider store={store}>
+          <App />
+        </Provider>
+      );
       return;
     }
 
-    installAuthenticatedFetch(keycloak);
+    if (isKeycloakCallback) {
+      // Returned from Keycloak with a code, but token exchange failed.
+      // Show error rather than looping. Typical causes:
+      //   - Keycloak not started with --proxy edge (needed for nginx HTTPS termination)
+      //   - Valid Redirect URIs not set to https://cockpit.altzentech.com/* in Keycloak admin
+      showAuthError("Login failed. Keycloak could not complete authentication.");
+      return;
+    }
 
-    createRoot(rootElement).render(
-      <Provider store={store}>
-        <App />
-      </Provider>
-    );
+    // Fresh visit — redirect to Keycloak login page.
+    void keycloak.login({ redirectUri: window.location.origin });
   })
   .catch((error) => {
-    console.error("Failed to initialize Keycloak.", error);
+    console.error("Keycloak init failed:", error);
+    showAuthError("Could not connect to the authentication server. Please try again.");
   });
